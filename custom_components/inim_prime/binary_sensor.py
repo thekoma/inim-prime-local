@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .client import FAULT_FLAG_KEYS, ZoneState, Area, Scenario, Zone
-
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -16,6 +14,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .client import FAULT_FLAG_KEYS, Area, Scenario, Zone, ZoneState
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 

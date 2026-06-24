@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from .client import InimPrimeClient
-
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .client import InimPrimeClient
 from .const import (
     CONF_APIKEY,
     CONF_USE_HTTPS,

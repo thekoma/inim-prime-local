@@ -19,7 +19,7 @@ class Version:
     servizio: bool
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "Version":
+    def from_raw(cls, d: dict[str, Any]) -> Version:
         return cls(
             version=d["version"],
             verhttp=d["verhttp"],
@@ -38,7 +38,7 @@ class Zone:
     excluded: bool
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "Zone":
+    def from_raw(cls, d: dict[str, Any]) -> Zone:
         return cls(
             id=int(d["id"]),
             label=d["lb"].strip(),
@@ -58,7 +58,7 @@ class Area:
     alarm_memory: bool
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "Area":
+    def from_raw(cls, d: dict[str, Any]) -> Area:
         return cls(
             id=int(d["id"]),
             label=d["lb"].strip(),
@@ -75,7 +75,7 @@ class Scenario:
     active: bool
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "Scenario":
+    def from_raw(cls, d: dict[str, Any]) -> Scenario:
         return cls(id=int(d["id"]), label=d["lb"].strip(), active=d["st"] == "1")
 
 
@@ -88,7 +88,7 @@ class Output:
     type: int
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "Output":
+    def from_raw(cls, d: dict[str, Any]) -> Output:
         return cls(
             id=int(d["id"]),
             label=d["lb"].strip(),
@@ -203,7 +203,7 @@ class Fault:
     flags: dict[str, bool] = field(default_factory=_all_flags_false)
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "Fault":
+    def from_raw(cls, d: dict[str, Any]) -> Fault:
         fau = d["fau"]
         return cls(
             vcc=parse_decimal(d["vcc"]),
@@ -220,7 +220,7 @@ class Timer:
     active: bool
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "Timer":
+    def from_raw(cls, d: dict[str, Any]) -> Timer:
         return cls(id=int(d["id"]), label=d["lb"].strip(), active=d["st"] == "1")
 
 
@@ -232,7 +232,7 @@ class ApiStats:
     last_ip: str
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "ApiStats":
+    def from_raw(cls, d: dict[str, Any]) -> ApiStats:
         return cls(
             api=d["api"],
             connections=int(d["nc"]),
@@ -247,7 +247,7 @@ class IpAcl:
     ips: list[str]
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "IpAcl":
+    def from_raw(cls, d: dict[str, Any]) -> IpAcl:
         return cls(
             only_enabled=d["soloIpAbilitati"],
             ips=[x["IP"] for x in d["listaIP"] if x["IP"] != "255.255.255.255"],
@@ -260,7 +260,7 @@ class MacAcl:
     macs: list[str]
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "MacAcl":
+    def from_raw(cls, d: dict[str, Any]) -> MacAcl:
         return cls(
             only_enabled=d["soloMacAbilitati"],
             macs=[x["MAC"] for x in d["listaMAC"] if x["MAC"] != "FF-FF-FF-FF-FF-FF"],
@@ -273,5 +273,5 @@ class OpenZone:
     label: str
 
     @classmethod
-    def from_raw(cls, d: dict[str, Any]) -> "OpenZone":
+    def from_raw(cls, d: dict[str, Any]) -> OpenZone:
         return cls(id=int(d["id"]), label=d["lb"].strip())

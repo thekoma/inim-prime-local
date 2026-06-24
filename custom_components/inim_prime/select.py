@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from .client import ApiStatus, InimApiError, InimConnectionError
-
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -11,6 +9,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .client import ApiStatus, InimApiError, InimConnectionError
 from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 

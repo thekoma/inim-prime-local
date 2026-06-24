@@ -5,13 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-from .client import (
-    InimApiError,
-    InimConnectionError,
-    InimPrimeClient,
-    ApiStatus,
-)
-
 from homeassistant.components import webhook
 from homeassistant.components.persistent_notification import (
     async_create as async_create_notification,
@@ -25,6 +18,12 @@ from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .client import (
+    ApiStatus,
+    InimApiError,
+    InimConnectionError,
+    InimPrimeClient,
+)
 from .const import (
     CONF_APIKEY,
     CONF_SCAN_INTERVAL_ACTIVE,

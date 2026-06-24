@@ -19,7 +19,6 @@ from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import ZoneState
-
 from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimData, InimDataUpdateCoordinator
 

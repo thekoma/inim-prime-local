@@ -6,24 +6,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import timedelta
-from typing import Protocol, TypeVar
-
-from .client import (
-    ApiStatus,
-    InimApiError,
-    InimConnectionError,
-    InimPrimeClient,
-    ApiStats,
-    Area,
-    AreaMode,
-    AreaState,
-    Fault,
-    Output,
-    Scenario,
-    Version,
-    Zone,
-    ZoneState,
-)
+from typing import Protocol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -31,6 +14,22 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .client import (
+    ApiStats,
+    ApiStatus,
+    Area,
+    AreaMode,
+    AreaState,
+    Fault,
+    InimApiError,
+    InimConnectionError,
+    InimPrimeClient,
+    Output,
+    Scenario,
+    Version,
+    Zone,
+    ZoneState,
+)
 from .const import (
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
@@ -40,7 +39,6 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     DEFAULT_SCAN_INTERVAL_IDLE,
     DOMAIN,
-    FAILURES_BEFORE_BACKOFF,
     EV_ALARM,
     EV_ARM,
     EV_DISARM,
@@ -50,6 +48,7 @@ from .const import (
     EV_TAMPER,
     EV_ZONE_CLOSE,
     EV_ZONE_OPEN,
+    FAILURES_BEFORE_BACKOFF,
     LOGGER,
 )
 
@@ -74,10 +73,7 @@ class _HasId(Protocol):
     def id(self) -> int: ...
 
 
-_IdT = TypeVar("_IdT", bound=_HasId)
-
-
-def _replace_in_list(items: list[_IdT], item: _IdT) -> list[_IdT]:
+def _replace_in_list[IdT: _HasId](items: list[IdT], item: IdT) -> list[IdT]:
     """Return a new list with the element whose ``.id`` matches replaced.
 
     If no element matches, the original list is returned unchanged.
@@ -375,7 +371,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         return None
 
     @staticmethod
-    def _find(items: list[_IdT], raw_id: str | None) -> _IdT | None:
+    def _find[IdT: _HasId](items: list[IdT], raw_id: str | None) -> IdT | None:
         """Return the item whose ``.id`` matches ``raw_id`` (as int), or None."""
         if raw_id is None:
             return None

@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .client import InimApiError, InimConnectionError, ApiStatus, Output, Zone
-
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
@@ -20,6 +18,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .client import ApiStatus, InimApiError, InimConnectionError, Output, Zone
 from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 

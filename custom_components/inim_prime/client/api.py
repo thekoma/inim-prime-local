@@ -1,7 +1,6 @@
 """Async HTTP client for the INIM PrimeX local API."""
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -28,7 +27,7 @@ class InimError(Exception):
 
 
 class InimApiError(InimError):
-    def __init__(self, status: "ApiStatus | int"):
+    def __init__(self, status: ApiStatus | int):
         self.status: ApiStatus | int
         try:
             self.status = ApiStatus(status)
@@ -68,7 +67,7 @@ class InimPrimeClient:
                 if resp.status != 200:
                     raise InimConnectionError(f"HTTP {resp.status}")
                 body = await resp.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        except (TimeoutError, aiohttp.ClientError) as err:
             raise InimConnectionError(str(err)) from err
         envelope = json.loads(body)
         status = envelope.get("status")

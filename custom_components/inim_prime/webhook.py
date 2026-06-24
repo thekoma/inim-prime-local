@@ -20,7 +20,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
 
 from aiohttp import web
-
 from homeassistant.components import webhook
 from homeassistant.core import HomeAssistant
 

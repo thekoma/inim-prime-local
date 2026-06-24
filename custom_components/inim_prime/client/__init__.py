@@ -1,19 +1,25 @@
 """Vendored INIM PrimeX API client — self-contained, no external package needed."""
 
+from .api import (
+    InimApiError,
+    InimConnectionError,
+    InimError,
+    InimPrimeClient,
+)
 from .const import (
     API_PATH,
     ApiStatus,
-    ArmMode,
     AreaMode,
     AreaState,
+    ArmMode,
     Command,
     ZoneState,
 )
 from .models import (
+    FAULT_FLAG_KEYS,
     ApiStats,
     Area,
     Fault,
-    FAULT_FLAG_KEYS,
     IpAcl,
     MacAcl,
     OpenZone,
@@ -23,12 +29,6 @@ from .models import (
     Version,
     Zone,
     parse_decimal,
-)
-from .api import (
-    InimApiError,
-    InimConnectionError,
-    InimError,
-    InimPrimeClient,
 )
 
 __all__ = [

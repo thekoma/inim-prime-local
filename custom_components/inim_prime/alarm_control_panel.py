@@ -4,16 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .client import (
-    ApiStatus,
-    Area,
-    AreaMode,
-    AreaState,
-    ArmMode,
-    InimApiError,
-    InimConnectionError,
-)
-
 from homeassistant.components.alarm_control_panel import AlarmControlPanelEntity
 from homeassistant.components.alarm_control_panel.const import (
     AlarmControlPanelEntityFeature,
@@ -25,6 +15,15 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .client import (
+    ApiStatus,
+    Area,
+    AreaMode,
+    AreaState,
+    ArmMode,
+    InimApiError,
+    InimConnectionError,
+)
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 
