@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-ha/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local Home Assistant test/demo config
+.ha-demo/
+.shots/
+
+# Secrets / local config — never commit
+.env
+
+# Reverse-engineering / vendor material — kept strictly local, never published
+re/
+firmware-extracted/
+firmware-extracted-trim/
+inimcloud/
+tests_cloud/
+docs/superpowers/
+docs/api-reference.md
+docs/firmware-extraction.md
+docs/panel-firmware-analysis.md
+docs/security-and-firmware.md
+docs/realtime-notifications-design.md
+docs/comparison-existing-inim-integrations.md
+
+# OS
+.DS_Store

@@ -1,0 +1,22 @@
+# Test-runner image for the INIM Prime HA integration.
+# HA version is a build arg so we can switch versions easily for the pipeline.
+ARG PYTHON_VERSION=3.13
+FROM python:${PYTHON_VERSION}-slim
+
+ARG HA_VERSION=2026.2.3
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+# System deps occasionally needed by HA test extras
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git build-essential libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install test dependencies directly — no inimprime package install needed.
+# The repo (incl. custom_components/, tests/, tests_ha/, tests_e2e/) is bind-mounted at /app at runtime.
+RUN pip install aiohttp python-dotenv pytest pytest-asyncio \
+    "homeassistant==${HA_VERSION}" pytest-homeassistant-custom-component
+
+CMD ["pytest", "-q"]

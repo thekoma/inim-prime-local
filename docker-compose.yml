@@ -1,0 +1,50 @@
+# Docker test pipeline for the INIM Prime HA integration.
+#
+#   docker compose build                 # build the test image (HA_VERSION/PYTHON_VERSION args)
+#   docker compose run --rm unit         # pure client unit tests (tests/)
+#   docker compose run --rm ha-unit      # HA integration unit tests (tests_ha/)
+#   docker compose run --rm e2e          # live end-to-end against the real panel (needs INIM_* env)
+#   docker compose up homeassistant      # real HA server with the integration mounted (interactive E2E)
+#
+# Switch HA versions:  HA_VERSION=2025.12.0 docker compose build
+# Panel creds come from the repo .env (gitignored): INIM_HOST, INIM_PORT, INIM_APIKEY, INIM_USE_HTTPS
+
+x-test-build: &test-build
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.tests
+    args:
+      PYTHON_VERSION: ${PYTHON_VERSION:-3.13}
+      HA_VERSION: ${HA_VERSION:-2026.2.3}
+  volumes:
+    - ./:/app
+  working_dir: /app
+
+services:
+  unit:
+    <<: *test-build
+    command: ["pytest", "tests", "-q"]
+
+  ha-unit:
+    <<: *test-build
+    command: ["pytest", "tests_ha", "-q"]
+
+  e2e:
+    <<: *test-build
+    env_file: [.env]
+    # talks to the panel on the LAN; default bridge networking reaches LAN IPs outbound
+    command: ["pytest", "tests_e2e", "-q", "-s"]
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:${HA_IMAGE_VERSION:-stable}
+    container_name: inim_ha
+    volumes:
+      - ./custom_components/inim_prime:/config/custom_components/inim_prime:ro
+      - inim_ha_config:/config
+    ports:
+      - "8123:8123"
+    env_file: [.env]
+    restart: unless-stopped
+
+volumes:
+  inim_ha_config:

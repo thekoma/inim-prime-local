@@ -1,0 +1,12 @@
+# Known limitations
+
+Honest boundaries of this integration.
+
+- **Output control needs the panel "Code".** Toggling panel outputs via the API requires the output-control Code to be configured on the panel; otherwise the panel rejects the command and Home Assistant raises a clear error. The output switches are therefore **hidden by default** — enable them only if your panel allows API output control.
+- **Realtime push is a one-time manual setup.** Instant updates use the panel's event-action ("Invio pagine web") table, which you configure once in PrimeStudio (see [realtime.md](realtime.md)). There is no API to program those entries automatically, so without that setup the integration relies on its (already fast) adaptive polling.
+- **Some commands depend on the panel/firmware.** On some panels `get_gsm_status` and `get_log_elements` return *not implemented*; the corresponding data (GSM diagnostics, event log) is then unavailable via the local API.
+- **No automatic discovery.** INIM panels don't advertise themselves on the network, so you enter the host/port manually (no mDNS/SSDP/DHCP discovery).
+- **Prime / PrimeX only.** This integration speaks the Prime on-board HTTP API. **SmartLiving / Nexus** panels use a different protocol — see the alternatives in the README.
+- **Plaintext on the LAN.** The panel API is HTTP and the key is a bearer token; keep it on a trusted LAN segment with the panel's IP/MAC allow-list enabled, and never expose it to the internet (see the security notes in the README).
+- **Fault decomposition is best-effort.** The per-fault binary sensors are derived from the panel's documented fault bitmap; the exact per-bit mapping is treated conservatively and may be refined as more real fault data is observed. The aggregate **System fault** sensor is the reliable headline.
+- **In-Home-Assistant brand icon.** The custom INIM-style icon ships in this repo, but the icon shown *inside* Home Assistant comes from the official `home-assistant/brands` repository (a separate, core-only submission); until then HA shows a default icon.

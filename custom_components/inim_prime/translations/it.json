@@ -1,0 +1,141 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connessione a INIM Prime",
+        "description": "Inserisci i dettagli di connessione della tua centrale INIM PrimeX.",
+        "data": {
+          "host": "Host",
+          "port": "Porta",
+          "apikey": "Chiave API",
+          "use_https": "Usa HTTPS"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Riautentica INIM Prime",
+        "description": "La centrale a {host} ha rifiutato la chiave API memorizzata. Inserisci una chiave API valida per continuare.",
+        "data": {
+          "apikey": "Chiave API"
+        }
+      },
+      "reconfigure": {
+        "title": "Riconfigura INIM Prime",
+        "description": "Aggiorna i dettagli di connessione della tua centrale INIM PrimeX. Usa questa procedura per ruotare la chiave API o spostare la centrale su un nuovo indirizzo senza rimuovere l'integrazione.",
+        "data": {
+          "host": "Host",
+          "port": "Porta",
+          "apikey": "Chiave API",
+          "use_https": "Usa HTTPS"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Chiave API non valida.",
+      "cannot_connect": "Impossibile connettersi alla centrale.",
+      "unknown": "Errore imprevisto."
+    },
+    "abort": {
+      "already_configured": "Questa centrale è già configurata.",
+      "reauth_successful": "Riautenticazione completata con successo.",
+      "reconfigure_successful": "Riconfigurazione completata con successo."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opzioni INIM Prime",
+        "description": "Regola gli intervalli di polling e abilita la modalità push per ricevere eventi realtime dalla centrale tramite webhook locale. L'URL del webhook viene mostrato in una notifica dopo il salvataggio.",
+        "data": {
+          "scan_interval_idle": "Intervallo di polling a riposo (secondi)",
+          "scan_interval_active": "Intervallo di polling attivo (secondi)",
+          "webhook_enabled": "Abilita push realtime (webhook locale)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "supply_voltage": {
+        "name": "Tensione di alimentazione"
+      },
+      "open_zone_count": {
+        "name": "Zone aperte"
+      },
+      "active_scenario": {
+        "name": "Scenario attivo"
+      },
+      "api_connections": {
+        "name": "Connessioni API"
+      },
+      "api_last_ip": {
+        "name": "Ultimo client API"
+      }
+    },
+    "select": {
+      "active_scenario": {
+        "name": "Scenario attivo"
+      }
+    },
+    "binary_sensor": {
+      "system_fault": {
+        "name": "Guasto di sistema"
+      },
+      "low_battery": {
+        "name": "Batteria scarica"
+      },
+      "fault_mains": {
+        "name": "Guasto rete elettrica"
+      },
+      "no_phone_line": {
+        "name": "Guasto linea telefonica"
+      },
+      "jam_radio": {
+        "name": "Disturbo radio"
+      },
+      "low_battery_wls": {
+        "name": "Batteria scarica wireless"
+      },
+      "disappearance_wls": {
+        "name": "Dispositivo wireless perso"
+      },
+      "fault_gsm": {
+        "name": "Guasto GSM"
+      },
+      "sensor_dirty": {
+        "name": "Sensore sporco"
+      },
+      "zone_fault": {
+        "name": "Guasto zona"
+      },
+      "sirens": {
+        "name": "Guasto sirena"
+      },
+      "power_supply": {
+        "name": "Guasto alimentazione"
+      },
+      "radio_keypads": {
+        "name": "Guasto tastiera radio"
+      },
+      "tamper": {
+        "name": "Manomissione"
+      },
+      "comm_internet": {
+        "name": "Guasto comunicazione"
+      }
+    }
+  },
+  "exceptions": {
+    "output_code_not_allowed": {
+      "message": "Il controllo delle uscite richiede la configurazione del Codice della centrale."
+    },
+    "zones_not_ready": {
+      "message": "Il comando è stato rifiutato perché una o più zone non sono pronte (aperte o in guasto)."
+    },
+    "command_failed": {
+      "message": "Il comando alla centrale è fallito: {error}"
+    },
+    "invalid_scenario": {
+      "message": "Scenario sconosciuto: {option}"
+    }
+  }
+}

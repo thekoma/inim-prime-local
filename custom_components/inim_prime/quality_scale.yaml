@@ -1,0 +1,151 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: >-
+      No custom service actions are registered; the integration only sets up
+      entities and a webhook. Nothing to register in async_setup.
+  appropriate-polling:
+    status: done
+  brands:
+    status: exempt
+    comment: >-
+      Custom/HACS integration: brand assets shipped in-repo; official
+      home-assistant/brands submission is core-only.
+  common-modules:
+    status: done
+  config-flow:
+    status: done
+  config-flow-test-coverage:
+    status: done
+  dependency-transparency:
+    status: done
+    comment: >-
+      No external runtime dependencies (requirements is empty); the async
+      client is vendored under client/ and uses HA's async_get_clientsession.
+  docs-actions:
+    status: exempt
+    comment: >-
+      Custom integration: equivalent docs in repo README/docs/. No custom
+      service actions to document.
+  docs-high-level-description:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-installation-instructions:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-removal-instructions:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  entity-event-setup:
+    status: done
+  entity-unique-id:
+    status: done
+  has-entity-name:
+    status: done
+  runtime-data:
+    status: done
+  test-before-configure:
+    status: done
+  test-before-setup:
+    status: done
+  unique-config-entry:
+    status: done
+
+  # Silver
+  action-exceptions:
+    status: done
+    comment: >-
+      Service-like entity commands raise HomeAssistantError with a
+      translation_key on failure (e.g. command_failed, zones_not_ready).
+  config-entry-unloading:
+    status: done
+  docs-configuration-parameters:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-installation-parameters:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  entity-unavailable:
+    status: done
+  integration-owner:
+    status: done
+  log-when-unavailable:
+    status: done
+  parallel-updates:
+    status: done
+  reauthentication-flow:
+    status: done
+  test-coverage:
+    status: done
+    comment: 100% line coverage on custom_components/inim_prime.
+
+  # Gold
+  devices:
+    status: done
+  diagnostics:
+    status: done
+  discovery:
+    status: exempt
+    comment: >-
+      Panel exposes no network discovery (mDNS/SSDP); manual host entry.
+  discovery-update-info:
+    status: exempt
+    comment: >-
+      Panel exposes no network discovery (mDNS/SSDP); manual host entry.
+  docs-data-update:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-examples:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-known-limitations:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-supported-devices:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-supported-functions:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-troubleshooting:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  docs-use-cases:
+    status: exempt
+    comment: 'Custom integration: equivalent docs in repo README/docs/.'
+  dynamic-devices:
+    status: done
+    comment: >-
+      Zones, areas, scenarios and outputs are added dynamically as the
+      coordinator discovers them.
+  entity-category:
+    status: done
+  entity-device-class:
+    status: done
+  entity-disabled-by-default:
+    status: done
+  entity-translations:
+    status: done
+  exception-translations:
+    status: done
+  icon-translations:
+    status: done
+  reconfiguration-flow:
+    status: done
+  repair-issues:
+    status: exempt
+    comment: >-
+      No recurring user-actionable misconfiguration beyond authentication,
+      which is handled by the reauthentication flow.
+  stale-devices:
+    status: exempt
+    comment: 'Single hub device, removed with the config entry.'
+
+  # Platinum
+  async-dependency:
+    status: done
+  inject-websession:
+    status: done
+  strict-typing:
+    status: done

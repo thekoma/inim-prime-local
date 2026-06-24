@@ -1,0 +1,14 @@
+{
+  "domain": "inim_prime",
+  "name": "INIM Prime",
+  "version": "2026.6.0",
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "integration_type": "hub",
+  "quality_scale": "platinum",
+  "codeowners": ["@thekoma"],
+  "dependencies": ["http", "webhook"],
+  "requirements": [],
+  "documentation": "https://github.com/thekoma/inim-prime-local",
+  "issue_tracker": "https://github.com/thekoma/inim-prime-local/issues"
+}

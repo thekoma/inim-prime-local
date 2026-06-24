@@ -1,0 +1,141 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to INIM Prime",
+        "description": "Enter the connection details for your INIM PrimeX panel.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "apikey": "API key",
+          "use_https": "Use HTTPS"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate INIM Prime",
+        "description": "The panel at {host} rejected the stored API key. Enter a valid API key to continue.",
+        "data": {
+          "apikey": "API key"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure INIM Prime",
+        "description": "Update the connection details for your INIM PrimeX panel. Use this to rotate the API key or move the panel to a new address without removing the integration.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "apikey": "API key",
+          "use_https": "Use HTTPS"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid API key.",
+      "cannot_connect": "Failed to connect to the panel.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This panel is already configured.",
+      "reauth_successful": "Reauthentication was successful.",
+      "reconfigure_successful": "Reconfiguration was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "INIM Prime options",
+        "description": "Tune the polling intervals and enable push mode to receive realtime local webhook events from the panel. The webhook URL is shown in a notification after saving.",
+        "data": {
+          "scan_interval_idle": "Idle poll interval (seconds)",
+          "scan_interval_active": "Active poll interval (seconds)",
+          "webhook_enabled": "Enable realtime push (local webhook)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "supply_voltage": {
+        "name": "Supply voltage"
+      },
+      "open_zone_count": {
+        "name": "Open zones"
+      },
+      "active_scenario": {
+        "name": "Active scenario"
+      },
+      "api_connections": {
+        "name": "API connections"
+      },
+      "api_last_ip": {
+        "name": "Last API client"
+      }
+    },
+    "select": {
+      "active_scenario": {
+        "name": "Active scenario"
+      }
+    },
+    "binary_sensor": {
+      "system_fault": {
+        "name": "System fault"
+      },
+      "low_battery": {
+        "name": "Low battery"
+      },
+      "fault_mains": {
+        "name": "Mains fault"
+      },
+      "no_phone_line": {
+        "name": "Phone line fault"
+      },
+      "jam_radio": {
+        "name": "Radio jamming"
+      },
+      "low_battery_wls": {
+        "name": "Wireless low battery"
+      },
+      "disappearance_wls": {
+        "name": "Wireless device lost"
+      },
+      "fault_gsm": {
+        "name": "GSM fault"
+      },
+      "sensor_dirty": {
+        "name": "Sensor dirty"
+      },
+      "zone_fault": {
+        "name": "Zone fault"
+      },
+      "sirens": {
+        "name": "Siren fault"
+      },
+      "power_supply": {
+        "name": "Power supply fault"
+      },
+      "radio_keypads": {
+        "name": "Radio keypad fault"
+      },
+      "tamper": {
+        "name": "Tamper"
+      },
+      "comm_internet": {
+        "name": "Communication fault"
+      }
+    }
+  },
+  "exceptions": {
+    "output_code_not_allowed": {
+      "message": "Output control requires the panel Code to be configured."
+    },
+    "zones_not_ready": {
+      "message": "The command was rejected because one or more zones are not ready (open or in fault)."
+    },
+    "command_failed": {
+      "message": "The panel command failed: {error}"
+    },
+    "invalid_scenario": {
+      "message": "Unknown scenario: {option}"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      type:
+        description: "Release type"
+        type: choice
+        options: [release, rc, beta]
+        default: release
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+      - "[0-9]*.[0-9]*.[0-9]*-*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve CalVer version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+            case "$VERSION" in *-*) PRERELEASE=true ;; *) PRERELEASE=false ;; esac
+          else
+            YM="$(date +%Y).$(date +%-m)"
+            TYPE="${{ inputs.type }}"
+            LATEST=$(git tag -l "${YM}.*" --sort=-v:refname | grep -vE '\-' | head -1)
+            if [ -z "$LATEST" ]; then INC=0; else INC=$(( $(echo "$LATEST" | awk -F. '{print $3}') + 1 )); fi
+            BASE="${YM}.${INC}"
+            if [ "$TYPE" = "release" ]; then
+              VERSION="$BASE"; PRERELEASE=false
+            else
+              LP=$(git tag -l "${BASE}-${TYPE}*" --sort=-v:refname | head -1)
+              if [ -z "$LP" ]; then N=1; else N=$(( $(echo "$LP" | grep -oE '[0-9]+$') + 1 )); fi
+              VERSION="${BASE}-${TYPE}${N}"; PRERELEASE=true
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $VERSION (prerelease=$PRERELEASE)"
+
+      - name: Sync manifest version
+        run: |
+          python -c "import json,sys; p='custom_components/inim_prime/manifest.json'; d=json.load(open(p)); d['version']='${{ steps.ver.outputs.version }}'; json.dump(d,open(p,'w'),indent=2); open(p,'a').write('\n')"
+
+      - name: Commit manifest bump (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add custom_components/inim_prime/manifest.json
+          git commit -m "chore: release ${{ steps.ver.outputs.version }}" || echo "no change"
+          git tag "${{ steps.ver.outputs.version }}"
+          git push origin HEAD:main
+          git push origin "${{ steps.ver.outputs.version }}"
+
+      - name: Package integration
+        run: |
+          cd custom_components/inim_prime
+          zip -r "${{ github.workspace }}/inim_prime.zip" . -x '*/__pycache__/*'
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          generate_release_notes: true
+          files: inim_prime.zip

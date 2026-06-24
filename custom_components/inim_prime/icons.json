@@ -1,0 +1,73 @@
+{
+  "entity": {
+    "sensor": {
+      "supply_voltage": {
+        "default": "mdi:flash"
+      },
+      "open_zone_count": {
+        "default": "mdi:door-open"
+      },
+      "active_scenario": {
+        "default": "mdi:playlist-check"
+      },
+      "api_connections": {
+        "default": "mdi:lan-connect"
+      },
+      "api_last_ip": {
+        "default": "mdi:ip-network"
+      }
+    },
+    "select": {
+      "active_scenario": {
+        "default": "mdi:playlist-play"
+      }
+    },
+    "binary_sensor": {
+      "system_fault": {
+        "default": "mdi:alert"
+      },
+      "low_battery": {
+        "default": "mdi:battery-alert"
+      },
+      "fault_mains": {
+        "default": "mdi:power-plug-off"
+      },
+      "no_phone_line": {
+        "default": "mdi:phone-off"
+      },
+      "jam_radio": {
+        "default": "mdi:radio-tower"
+      },
+      "low_battery_wls": {
+        "default": "mdi:battery-alert-variant-outline"
+      },
+      "disappearance_wls": {
+        "default": "mdi:access-point-off"
+      },
+      "fault_gsm": {
+        "default": "mdi:signal-off"
+      },
+      "sensor_dirty": {
+        "default": "mdi:eye-off"
+      },
+      "zone_fault": {
+        "default": "mdi:alert-circle"
+      },
+      "sirens": {
+        "default": "mdi:bullhorn"
+      },
+      "power_supply": {
+        "default": "mdi:power-plug-off"
+      },
+      "radio_keypads": {
+        "default": "mdi:dialpad"
+      },
+      "tamper": {
+        "default": "mdi:shield-alert"
+      },
+      "comm_internet": {
+        "default": "mdi:lan-disconnect"
+      }
+    }
+  }
+}
