@@ -25,8 +25,9 @@ from custom_components.inim_prime.binary_sensor import (
     InimFaultFlagBinarySensor,
     InimScenarioBinarySensor,
     InimZoneBinarySensor,
-    _guess_device_class,
+    _label_language,
 )
+from custom_components.inim_prime.const import CONF_LABEL_LANGUAGE
 from custom_components.inim_prime.coordinator import InimData
 
 
@@ -81,25 +82,39 @@ def inim_data() -> InimData:
 
 @pytest.fixture
 def coordinator(inim_data: InimData) -> SimpleNamespace:
-    """Return a fake coordinator with sample data."""
-    entry = SimpleNamespace(entry_id="abc123", title="INIM Prime")
+    """Return a fake coordinator with sample data.
+
+    Includes ``hass.config.language`` and ``config_entry.options`` because the
+    zone entity resolves the label-guessing language from them.
+    """
+    entry = SimpleNamespace(entry_id="abc123", title="INIM Prime", options={})
+    hass = SimpleNamespace(config=SimpleNamespace(language="it"))
     return SimpleNamespace(
         data=inim_data,
         config_entry=entry,
+        hass=hass,
         last_update_success=True,
     )
 
 
-def test_guess_device_class() -> None:
-    """The label heuristic maps to the expected device classes."""
-    assert _guess_device_class("Finestra cucina") is BinarySensorDeviceClass.WINDOW
-    assert _guess_device_class("Tapparella") is BinarySensorDeviceClass.WINDOW
-    assert _guess_device_class("Porta ingresso") is BinarySensorDeviceClass.DOOR
-    assert _guess_device_class("Door garage") is BinarySensorDeviceClass.DOOR
-    assert _guess_device_class("Volumetrico salotto") is BinarySensorDeviceClass.MOTION
-    assert _guess_device_class("PIR hall") is BinarySensorDeviceClass.MOTION
-    assert _guess_device_class("Sirena esterna") is BinarySensorDeviceClass.TAMPER
-    assert _guess_device_class("Generic input") is None
+def test_label_language_resolution() -> None:
+    """The label language follows the override option, else the HA language."""
+    hass = SimpleNamespace(config=SimpleNamespace(language="it"))
+
+    auto = SimpleNamespace(
+        hass=hass, config_entry=SimpleNamespace(options={})
+    )
+    assert _label_language(auto) == "it"  # no option -> HA language
+
+    explicit_auto = SimpleNamespace(
+        hass=hass, config_entry=SimpleNamespace(options={CONF_LABEL_LANGUAGE: "auto"})
+    )
+    assert _label_language(explicit_auto) == "it"  # "auto" -> HA language
+
+    override = SimpleNamespace(
+        hass=hass, config_entry=SimpleNamespace(options={CONF_LABEL_LANGUAGE: "en"})
+    )
+    assert _label_language(override) == "en"  # explicit override wins
 
 
 def test_zone_open_maps_to_is_on(coordinator: SimpleNamespace) -> None:

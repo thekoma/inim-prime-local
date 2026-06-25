@@ -47,6 +47,11 @@ CONF_WEBHOOK_ID: Final = "webhook_id"
 CONF_SCAN_INTERVAL_IDLE: Final = "scan_interval_idle"
 CONF_SCAN_INTERVAL_ACTIVE: Final = "scan_interval_active"
 
+# Language used to guess zone device classes (icons) from labels. "auto" follows
+# the Home Assistant system language; otherwise an explicit ISO-639-1 code.
+CONF_LABEL_LANGUAGE: Final = "label_language"
+LABEL_LANGUAGE_AUTO: Final = "auto"
+
 DEFAULT_PORT: Final = 8080
 DEFAULT_SCAN_INTERVAL: Final = 15
 DEFAULT_USE_HTTPS: Final = False

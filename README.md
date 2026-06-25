@@ -23,7 +23,7 @@ A **local, offline-first** Home Assistant integration for **INIM Prime / PrimeX*
 |---|---|---|
 | 🛡️ **Areas / partitions** | `alarm_control_panel` (one per area) | Arm **away / home / night**, disarm; live armed/disarmed/triggered state |
 | 🎬 **Scenarios** | `select` + per-scenario `binary_sensor` *(disabled by default)* | Apply any arming scenario. *Use the area `alarm_control_panel` for the actual arm state — the panel only reports a scenario as "active" for the system-wide Total macro ([details](docs/known-limitations.md)).* |
-| 🚪 **Zones** | `binary_sensor` (one per zone) | Open / closed in realtime; device class guessed from the zone name |
+| 🚪 **Zones** | `binary_sensor` (one per zone) | Open / closed in realtime; device class (and so the icon) guessed from the zone name in **12 languages** — window, door, garage, motion, smoke, gas, CO, water, vibration, tamper |
 | 🚫 **Zone bypass** | `switch` (one per zone) | Include / exclude a zone from arming |
 | ⚡ **Outputs** | `switch` (one per output) | Toggle panel outputs *(needs the panel "Code" enabled — hidden by default)* |
 | 🔋 **Power & faults** | `sensor` + `binary_sensor` | Supply voltage, open-zone count, system fault + a per-fault breakdown |
@@ -71,6 +71,7 @@ Open **Configure** on the integration to tune how it reads the panel.
 | **Idle poll interval** | `30 s` | How often to refresh when nothing is happening |
 | **Active poll interval** | `1 s` | Faster cadence for a short window after any change/event |
 | **Enable realtime push** | off | Register a local webhook for instant updates (see below) |
+| **Zone label language** | Auto | Language used to guess each zone's icon from its name (window/door/garage/motion/smoke/…). *Auto* follows Home Assistant's language; 12 languages are supported. |
 
 ### How fast can it go? (measured on a real PrimeX 4.07)
 

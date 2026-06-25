@@ -48,7 +48,11 @@
         "data": {
           "scan_interval_idle": "Intervallo di polling a riposo (secondi)",
           "scan_interval_active": "Intervallo di polling attivo (secondi)",
-          "webhook_enabled": "Abilita push realtime (webhook locale)"
+          "webhook_enabled": "Abilita push realtime (webhook locale)",
+          "label_language": "Lingua dei nomi zona (per le icone)"
+        },
+        "data_description": {
+          "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant."
         }
       }
     }
@@ -136,6 +140,25 @@
     },
     "invalid_scenario": {
       "message": "Scenario sconosciuto: {option}"
+    }
+  },
+  "selector": {
+    "label_language": {
+      "options": {
+        "auto": "Automatico (lingua di Home Assistant)",
+        "it": "Italiano",
+        "en": "Inglese",
+        "es": "Spagnolo",
+        "fr": "Francese",
+        "de": "Tedesco",
+        "pt": "Portoghese",
+        "nl": "Olandese",
+        "pl": "Polacco",
+        "zh": "Cinese",
+        "ru": "Russo",
+        "ar": "Arabo",
+        "hi": "Hindi"
+      }
     }
   }
 }

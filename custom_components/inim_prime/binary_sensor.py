@@ -15,26 +15,27 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import FAULT_FLAG_KEYS, Area, Scenario, Zone, ZoneState
-from .const import DOMAIN, is_factory_default_area
+from .const import CONF_LABEL_LANGUAGE, DOMAIN, LABEL_LANGUAGE_AUTO, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
+from .zone_guess import guess_device_class
 
 # Read-only platform: all state comes from the coordinator, no panel writes,
 # so updates need not be serialized.
 PARALLEL_UPDATES = 0
 
 
-def _guess_device_class(label: str) -> BinarySensorDeviceClass | None:
-    """Guess a zone's device class from its (lower-cased) label."""
-    lowered = label.lower()
-    if any(token in lowered for token in ("fin", "finestra", "window", "tapp", "lucernaio")):
-        return BinarySensorDeviceClass.WINDOW
-    if any(token in lowered for token in ("porta", "door", "ingresso")):
-        return BinarySensorDeviceClass.DOOR
-    if any(token in lowered for token in ("vol", "motion", "pir")):
-        return BinarySensorDeviceClass.MOTION
-    if any(token in lowered for token in ("sirena", "as ")):
-        return BinarySensorDeviceClass.TAMPER
-    return None
+def _label_language(coordinator: InimDataUpdateCoordinator) -> str:
+    """Resolve the language used to guess zone device classes from labels.
+
+    Uses the per-entry override option when set, otherwise the Home Assistant
+    system language (``hass.config.language``).
+    """
+    configured = coordinator.config_entry.options.get(
+        CONF_LABEL_LANGUAGE, LABEL_LANGUAGE_AUTO
+    )
+    if configured and configured != LABEL_LANGUAGE_AUTO:
+        return str(configured)
+    return coordinator.hass.config.language
 
 
 async def async_setup_entry(
@@ -118,9 +119,12 @@ class InimZoneBinarySensor(InimBaseBinarySensor):
         self._attr_unique_id = f"{entry.entry_id}_zone_{zone_id}"
         zone = self._zone
         self._last_label = zone.label if zone is not None else None
-        # Device class is guessed once from the initial label.
+        # Device class is guessed once from the initial label, in the configured
+        # (or HA system) language, so the entity gets a state-aware icon.
         self._attr_device_class = (
-            _guess_device_class(zone.label) if zone is not None else None
+            guess_device_class(zone.label, _label_language(coordinator))
+            if zone is not None
+            else None
         )
 
     @property

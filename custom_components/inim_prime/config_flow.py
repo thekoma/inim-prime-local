@@ -17,6 +17,11 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .client import (
     ApiStatus,
@@ -26,6 +31,7 @@ from .client import (
 )
 from .const import (
     CONF_APIKEY,
+    CONF_LABEL_LANGUAGE,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
@@ -36,8 +42,10 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_IDLE,
     DEFAULT_USE_HTTPS,
     DOMAIN,
+    LABEL_LANGUAGE_AUTO,
 )
 from .coordinator import InimConfigEntry
+from .zone_guess import SUPPORTED_LANGUAGES
 
 
 class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -257,6 +265,18 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                         CONF_WEBHOOK_ENABLED,
                         default=options.get(CONF_WEBHOOK_ENABLED, False),
                     ): bool,
+                    vol.Required(
+                        CONF_LABEL_LANGUAGE,
+                        default=options.get(
+                            CONF_LABEL_LANGUAGE, LABEL_LANGUAGE_AUTO
+                        ),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[LABEL_LANGUAGE_AUTO, *SUPPORTED_LANGUAGES],
+                            translation_key="label_language",
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
         )
