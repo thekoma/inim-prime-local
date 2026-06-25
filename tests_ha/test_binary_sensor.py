@@ -234,16 +234,23 @@ def test_fault_flag_binary_sensor(coordinator: SimpleNamespace) -> None:
 
 
 def test_scenario_binary_sensor(coordinator: SimpleNamespace) -> None:
-    """A per-scenario sensor tracks Scenario.active; RUNNING and enabled."""
+    """A per-scenario sensor tracks Scenario.active; RUNNING, disabled by default.
+
+    Disabled by default because the panel only sets a scenario's ``st`` flag for
+    the system-wide Total macro, not for single-area scenarios (see the
+    InimScenarioBinarySensor docstring); the per-area alarm_control_panel is the
+    authoritative arm state.
+    """
     active = InimScenarioBinarySensor(coordinator, 0)
     inactive = InimScenarioBinarySensor(coordinator, 1)
 
     assert active.device_class is BinarySensorDeviceClass.RUNNING
     assert active.entity_category is None
-    assert active.entity_registry_enabled_default is True
+    assert active.entity_registry_enabled_default is False
     assert active.unique_id == "abc123_scenario_active_0"
     assert active.name == "Disarm all"
     assert active.is_on is True
+    assert active.available is True
     assert inactive.is_on is False
 
     # A new poll flips the active scenario.
@@ -261,3 +268,16 @@ def test_scenario_binary_sensor(coordinator: SimpleNamespace) -> None:
     )
     assert active.is_on is False
     assert inactive.is_on is True
+
+    # When the scenario disappears from the panel, the entity goes unavailable.
+    coordinator.data = InimData(
+        version=coordinator.data.version,
+        areas=coordinator.data.areas,
+        zones=coordinator.data.zones,
+        scenarios=[],
+        outputs=[],
+        fault=coordinator.data.fault,
+        api_stats=None,
+    )
+    assert active.available is False
+    assert active.is_on is None

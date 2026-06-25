@@ -270,9 +270,21 @@ class InimFaultFlagBinarySensor(InimBaseBinarySensor):
 
 
 class InimScenarioBinarySensor(InimBaseBinarySensor):
-    """A RUNNING binary sensor reflecting whether a scenario is active."""
+    """A RUNNING binary sensor reflecting a scenario's panel ``st`` flag.
+
+    Disabled by default. On a live PrimeX (fw 4.07) the panel only ever sets a
+    scenario's ``st=1`` for the system-wide *Total* arm/disarm macro: single-area
+    scenarios (Ins.Box, Dis.Esterno, ...) never flip their own ``st``, not even
+    momentarily — verified by sampling ``get_scenarios_status`` at ~10 reads/s
+    across a full Box arm->disarm->arm cycle while the partition ``am`` changed
+    correctly. The authoritative arm state is therefore the per-area
+    ``alarm_control_panel``; these per-scenario sensors only carry signal for the
+    Total macro, so they are off by default to avoid implying a state the panel
+    does not actually report.
+    """
 
     _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self, coordinator: InimDataUpdateCoordinator, scenario_id: int

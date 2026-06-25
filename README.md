@@ -22,7 +22,7 @@ A **local, offline-first** Home Assistant integration for **INIM Prime / PrimeX*
 | Area of the panel | Home Assistant entity | What you get |
 |---|---|---|
 | 🛡️ **Areas / partitions** | `alarm_control_panel` (one per area) | Arm **away / home / night**, disarm; live armed/disarmed/triggered state |
-| 🎬 **Scenarios** | `select` + per-scenario `binary_sensor` | See & apply the active arming scenario; automate on scenario state |
+| 🎬 **Scenarios** | `select` + per-scenario `binary_sensor` *(disabled by default)* | Apply any arming scenario. *Use the area `alarm_control_panel` for the actual arm state — the panel only reports a scenario as "active" for the system-wide Total macro ([details](docs/known-limitations.md)).* |
 | 🚪 **Zones** | `binary_sensor` (one per zone) | Open / closed in realtime; device class guessed from the zone name |
 | 🚫 **Zone bypass** | `switch` (one per zone) | Include / exclude a zone from arming |
 | ⚡ **Outputs** | `switch` (one per output) | Toggle panel outputs *(needs the panel "Code" enabled — hidden by default)* |
@@ -30,7 +30,7 @@ A **local, offline-first** Home Assistant integration for **INIM Prime / PrimeX*
 | 🧹 **Alarm memory** | `button` (one per area) | Clear alarm memory; per-area alarm-memory sensors |
 | 🩺 **Diagnostics** | `sensor` | API connection count, last API client, panel/firmware info |
 
-Unused **factory-default areas** (`AREA 006…`) and the **output switches** are hidden by default so your entity list stays clean — re-enable any you actually use.
+Unused **factory-default areas** (`AREA 006…`), the **output switches**, and the **per-scenario "active" sensors** are hidden by default so your entity list stays clean — re-enable any you actually use.
 
 ## Why local?
 
