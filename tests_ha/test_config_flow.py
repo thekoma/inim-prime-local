@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 from custom_components.inim_prime.client import InimApiError, InimConnectionError, ApiStatus
 
 from homeassistant.config_entries import SOURCE_USER
-from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL
+from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT, CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -24,6 +24,7 @@ from custom_components.inim_prime.const import (
 )
 
 USER_INPUT = {
+    CONF_NAME: "Casa",
     CONF_HOST: "192.0.2.10",
     CONF_PORT: 8080,
     CONF_APIKEY: "secret-key",
@@ -50,7 +51,7 @@ async def test_user_flow_success(
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == "192.0.2.10"
+    assert result["title"] == "Casa"  # entry title is the friendly name, not the IP
     assert result["data"] == USER_INPUT
     # No stale scan_interval is persisted into the entry.
     assert CONF_SCAN_INTERVAL not in result["data"]

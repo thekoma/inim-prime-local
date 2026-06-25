@@ -87,7 +87,10 @@ def _fake_coordinator(data: InimData, client=None) -> SimpleNamespace:
         last_update_success=True,
         async_request_refresh=AsyncMock(),
         async_add_listener=lambda *a, **k: (lambda: None),
-        config_entry=SimpleNamespace(entry_id="abc123", title="INIM Prime"),
+        config_entry=SimpleNamespace(
+            entry_id="abc123", title="INIM Prime", options={}
+        ),
+        hass=SimpleNamespace(config=SimpleNamespace(language="it")),
     )
 
 

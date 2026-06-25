@@ -52,9 +52,16 @@ CONF_SCAN_INTERVAL_ACTIVE: Final = "scan_interval_active"
 CONF_LABEL_LANGUAGE: Final = "label_language"
 LABEL_LANGUAGE_AUTO: Final = "auto"
 
+# Group each zone under a per-room device, guessing the room from the label.
+CONF_GROUP_BY_ROOM: Final = "group_by_room"
+DEFAULT_GROUP_BY_ROOM: Final = True
+
 DEFAULT_PORT: Final = 8080
 DEFAULT_SCAN_INTERVAL: Final = 15
 DEFAULT_USE_HTTPS: Final = False
+# Friendly name for the panel; used as the config-entry title and the device
+# name (so entities read e.g. "Allarme Finestra Camera", not the panel IP).
+DEFAULT_NAME: Final = "INIM Prime"
 
 # Adaptive two-tier polling defaults (seconds).
 DEFAULT_SCAN_INTERVAL_IDLE: Final = 30

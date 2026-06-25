@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.const import CONF_HOST, CONF_PORT
+from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -31,12 +31,15 @@ from .client import (
 )
 from .const import (
     CONF_APIKEY,
+    CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
+    DEFAULT_GROUP_BY_ROOM,
+    DEFAULT_NAME,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     DEFAULT_SCAN_INTERVAL_IDLE,
@@ -94,12 +97,15 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
 
             errors = await self._async_validate(user_input)
             if not errors:
-                return self.async_create_entry(title=host, data=user_input)
+                return self.async_create_entry(
+                    title=user_input[CONF_NAME], data=user_input
+                )
 
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
                 {
+                    vol.Required(CONF_NAME, default=DEFAULT_NAME): str,
                     vol.Required(CONF_HOST): str,
                     vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
                     vol.Required(CONF_APIKEY): str,
@@ -168,7 +174,7 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
             if not errors:
                 return self.async_update_reload_and_abort(
                     entry,
-                    title=host,
+                    title=user_input[CONF_NAME],
                     unique_id=new_unique_id,
                     data_updates=user_input,
                 )
@@ -178,6 +184,9 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=vol.Schema(
                 {
+                    vol.Required(
+                        CONF_NAME, default=suggested.get(CONF_NAME, entry.title)
+                    ): str,
                     vol.Required(
                         CONF_HOST, default=suggested.get(CONF_HOST)
                     ): str,
@@ -277,6 +286,12 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                             mode=SelectSelectorMode.DROPDOWN,
                         )
                     ),
+                    vol.Required(
+                        CONF_GROUP_BY_ROOM,
+                        default=options.get(
+                            CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM
+                        ),
+                    ): bool,
                 }
             ),
         )

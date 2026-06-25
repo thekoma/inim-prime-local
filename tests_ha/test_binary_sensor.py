@@ -25,10 +25,10 @@ from custom_components.inim_prime.binary_sensor import (
     InimFaultFlagBinarySensor,
     InimScenarioBinarySensor,
     InimZoneBinarySensor,
-    _label_language,
 )
-from custom_components.inim_prime.const import CONF_LABEL_LANGUAGE
+from custom_components.inim_prime.const import CONF_GROUP_BY_ROOM, CONF_LABEL_LANGUAGE
 from custom_components.inim_prime.coordinator import InimData
+from custom_components.inim_prime.device import label_language
 
 
 def _zone(zone_id: int, label: str, state: ZoneState, **kw) -> Zone:
@@ -104,17 +104,17 @@ def test_label_language_resolution() -> None:
     auto = SimpleNamespace(
         hass=hass, config_entry=SimpleNamespace(options={})
     )
-    assert _label_language(auto) == "it"  # no option -> HA language
+    assert label_language(auto) == "it"  # no option -> HA language
 
     explicit_auto = SimpleNamespace(
         hass=hass, config_entry=SimpleNamespace(options={CONF_LABEL_LANGUAGE: "auto"})
     )
-    assert _label_language(explicit_auto) == "it"  # "auto" -> HA language
+    assert label_language(explicit_auto) == "it"  # "auto" -> HA language
 
     override = SimpleNamespace(
         hass=hass, config_entry=SimpleNamespace(options={CONF_LABEL_LANGUAGE: "en"})
     )
-    assert _label_language(override) == "en"  # explicit override wins
+    assert label_language(override) == "en"  # explicit override wins
 
 
 def test_zone_open_maps_to_is_on(coordinator: SimpleNamespace) -> None:
@@ -146,15 +146,42 @@ def test_zone_attributes(coordinator: SimpleNamespace) -> None:
     }
 
 
-def test_zone_shares_device_info(coordinator: SimpleNamespace) -> None:
-    """All entities share the single panel DeviceInfo."""
-    zone = InimZoneBinarySensor(coordinator, 1)
+def test_zone_without_room_uses_panel_device(coordinator: SimpleNamespace) -> None:
+    """A zone whose label has no recognised room stays on the panel device."""
+    zone = InimZoneBinarySensor(coordinator, 5)  # "Generic input" -> no room
     info = zone.device_info
     assert info["identifiers"] == {("inim_prime", "abc123")}
     assert info["manufacturer"] == "INIM"
     assert info["model"] == "4.07 PX500"
     assert info["sw_version"] == "4.07"
     assert info["name"] == "INIM Prime"
+
+
+def test_zone_grouped_into_room_device(coordinator: SimpleNamespace) -> None:
+    """With grouping on, a zone is placed under its per-room sub-device."""
+    zone = InimZoneBinarySensor(coordinator, 1)  # "Porta ingresso" -> Ingresso
+    info = zone.device_info
+    assert info["identifiers"] == {("inim_prime", "abc123_room_ingresso")}
+    assert info["name"] == "Ingresso"
+    assert info["manufacturer"] == "INIM"
+    assert info["via_device"] == ("inim_prime", "abc123")
+
+
+def test_zone_grouping_disabled_uses_panel_device(inim_data: InimData) -> None:
+    """With grouping disabled, even a roomful zone stays on the panel device."""
+    entry = SimpleNamespace(
+        entry_id="abc123",
+        title="INIM Prime",
+        options={CONF_GROUP_BY_ROOM: False},
+    )
+    coord = SimpleNamespace(
+        data=inim_data,
+        config_entry=entry,
+        hass=SimpleNamespace(config=SimpleNamespace(language="it")),
+        last_update_success=True,
+    )
+    zone = InimZoneBinarySensor(coord, 1)  # "Porta ingresso"
+    assert zone.device_info["identifiers"] == {("inim_prime", "abc123")}
 
 
 def test_fault_binary_sensor(coordinator: SimpleNamespace) -> None:

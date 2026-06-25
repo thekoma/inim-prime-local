@@ -53,10 +53,15 @@ In PrimeStudio, open the PrimeLAN configuration, enable the HTTP API and **Gener
 
 | Field | Notes |
 |---|---|
+| **Name** | Friendly name for the panel (e.g. `Allarme`). Used for the device and entity names — so entities read `Allarme Finestra Camera`, **not** the panel IP. |
 | **Host** | Panel IP, e.g. `192.168.1.50` |
 | **Port** | `8080` (default) |
 | **API key** | The key generated in PrimeStudio |
 | **Use HTTPS** | Only if the PrimeLAN board has HTTPS enabled |
+
+### Rooms & areas
+
+By default the integration **groups each zone (and its bypass switch) under a per-room device** — *Camera*, *Taverna*, *Bagno*, *Garage*… — inferred from the zone name in your language. In the post-setup "assign areas" dialog (and later in **Settings → Areas**) you then drop each room device into the matching Home Assistant **area**, in one step per room. Zones whose name has no recognisable room stay on the main panel device. Turn this off with **Group zones by room** in *Configure* if you'd rather keep everything on one device.
 
 **Rotating the key?** Use **⋮ → Reconfigure** on the integration to enter a new API key without removing anything.
 
@@ -71,7 +76,8 @@ Open **Configure** on the integration to tune how it reads the panel.
 | **Idle poll interval** | `30 s` | How often to refresh when nothing is happening |
 | **Active poll interval** | `1 s` | Faster cadence for a short window after any change/event |
 | **Enable realtime push** | off | Register a local webhook for instant updates (see below) |
-| **Zone label language** | Auto | Language used to guess each zone's icon from its name (window/door/garage/motion/smoke/…). *Auto* follows Home Assistant's language; 12 languages are supported. |
+| **Zone label language** | Auto | Language used to guess each zone's icon (and room) from its name (window/door/garage/motion/smoke/…). *Auto* follows Home Assistant's language; 12 languages are supported. |
+| **Group zones by room** | on | Place each zone under a per-room device (Camera, Bagno, Garage…) guessed from its name, so you can assign whole rooms to HA areas. |
 
 ### How fast can it go? (measured on a real PrimeX 4.07)
 

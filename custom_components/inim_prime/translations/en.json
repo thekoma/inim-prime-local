@@ -5,10 +5,14 @@
         "title": "Connect to INIM Prime",
         "description": "Enter the connection details for your INIM PrimeX panel.",
         "data": {
+          "name": "Name",
           "host": "Host",
           "port": "Port",
           "apikey": "API key",
           "use_https": "Use HTTPS"
+        },
+        "data_description": {
+          "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\")."
         }
       },
       "reauth_confirm": {
@@ -22,10 +26,14 @@
         "title": "Reconfigure INIM Prime",
         "description": "Update the connection details for your INIM PrimeX panel. Use this to rotate the API key or move the panel to a new address without removing the integration.",
         "data": {
+          "name": "Name",
           "host": "Host",
           "port": "Port",
           "apikey": "API key",
           "use_https": "Use HTTPS"
+        },
+        "data_description": {
+          "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\")."
         }
       }
     },
@@ -49,10 +57,12 @@
           "scan_interval_idle": "Idle poll interval (seconds)",
           "scan_interval_active": "Active poll interval (seconds)",
           "webhook_enabled": "Enable realtime push (local webhook)",
-          "label_language": "Zone label language (for icon guessing)"
+          "label_language": "Zone label language (for icon guessing)",
+          "group_by_room": "Group zones by room"
         },
         "data_description": {
-          "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language."
+          "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language.",
+          "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area."
         }
       }
     }

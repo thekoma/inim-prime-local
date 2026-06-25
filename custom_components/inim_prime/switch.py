@@ -21,6 +21,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .client import ApiStatus, InimApiError, InimConnectionError, Output, Zone
 from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
+from .device import group_zones_by_room, label_language, room_device_info
+from .room_guess import guess_room
 
 # Output/bypass toggles issue panel writes; the cgi is single-threaded, so
 # serialize commands to one in flight at a time.
@@ -181,6 +183,14 @@ class InimZoneBypassSwitch(
             sw_version=version.version,
             name=entry.title,
         )
+        # Follow the zone into its per-room device so the bypass switch lives
+        # alongside the zone's binary_sensor (same room grouping).
+        if group_zones_by_room(coordinator):
+            zone = self._zone
+            if zone is not None:
+                room = guess_room(zone.label, label_language(coordinator))
+                if room is not None:
+                    self._attr_device_info = room_device_info(coordinator, room)
 
     @property
     def _zone(self) -> Zone | None:

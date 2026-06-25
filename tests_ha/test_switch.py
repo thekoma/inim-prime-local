@@ -80,6 +80,8 @@ def fake_coordinator(version, outputs, zones):
     coordinator = SimpleNamespace(
         data=data,
         client=client,
+        config_entry=SimpleNamespace(entry_id="abc123", title="INIM Prime", options={}),
+        hass=SimpleNamespace(config=SimpleNamespace(language="en")),
         last_update_success=True,
         async_request_refresh=AsyncMock(),
         async_add_listener=lambda *a, **k: (lambda: None),
@@ -118,6 +120,16 @@ def test_zone_bypass_switch(fake_coordinator, entry):
     assert not_bypassed.name == "Front Door bypass"
     assert not_bypassed.unique_id == "abc123_zone_bypass_1"
     assert not_bypassed.entity_category is EntityCategory.CONFIG
+
+
+def test_zone_bypass_follows_zone_room(fake_coordinator, entry):
+    """The bypass switch is grouped under the same per-room device as its zone."""
+    # "Kitchen" resolves to a room; "Front Door" does not.
+    kitchen = InimZoneBypassSwitch(fake_coordinator, entry, 2)
+    front = InimZoneBypassSwitch(fake_coordinator, entry, 1)
+    assert kitchen.device_info["identifiers"] == {("inim_prime", "abc123_room_kitchen")}
+    assert kitchen.device_info["name"] == "Kitchen"
+    assert front.device_info["identifiers"] == {("inim_prime", "abc123")}
 
 
 async def test_output_turn_on_off(fake_coordinator, entry):

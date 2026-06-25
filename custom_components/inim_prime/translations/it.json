@@ -5,10 +5,14 @@
         "title": "Connessione a INIM Prime",
         "description": "Inserisci i dettagli di connessione della tua centrale INIM PrimeX.",
         "data": {
+          "name": "Nome",
           "host": "Host",
           "port": "Porta",
           "apikey": "Chiave API",
           "use_https": "Usa HTTPS"
+        },
+        "data_description": {
+          "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\")."
         }
       },
       "reauth_confirm": {
@@ -22,10 +26,14 @@
         "title": "Riconfigura INIM Prime",
         "description": "Aggiorna i dettagli di connessione della tua centrale INIM PrimeX. Usa questa procedura per ruotare la chiave API o spostare la centrale su un nuovo indirizzo senza rimuovere l'integrazione.",
         "data": {
+          "name": "Nome",
           "host": "Host",
           "port": "Porta",
           "apikey": "Chiave API",
           "use_https": "Usa HTTPS"
+        },
+        "data_description": {
+          "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\")."
         }
       }
     },
@@ -49,10 +57,12 @@
           "scan_interval_idle": "Intervallo di polling a riposo (secondi)",
           "scan_interval_active": "Intervallo di polling attivo (secondi)",
           "webhook_enabled": "Abilita push realtime (webhook locale)",
-          "label_language": "Lingua dei nomi zona (per le icone)"
+          "label_language": "Lingua dei nomi zona (per le icone)",
+          "group_by_room": "Raggruppa le zone per stanza"
         },
         "data_description": {
-          "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant."
+          "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant.",
+          "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant."
         }
       }
     }
