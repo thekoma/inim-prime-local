@@ -66,6 +66,13 @@ async def async_setup_entry(
         for scenario in coordinator.data.scenarios:
             _add(InimScenarioBinarySensor(coordinator, scenario.id))
 
+        # Multi-active scene sensors (only when the read-only 6004 channel
+        # supplied the scenario definitions). These correctly reflect several
+        # simultaneously-active scenes, unlike the panel's single ``st`` flag.
+        if coordinator.local_config is not None:
+            for scene in coordinator.local_config.scenes:
+                _add(InimSceneActiveBinarySensor(coordinator, scene.id))
+
         if new_entities:
             async_add_entities(new_entities)
 
@@ -73,9 +80,7 @@ async def async_setup_entry(
     _sync()
 
 
-class InimBaseBinarySensor(
-    CoordinatorEntity[InimDataUpdateCoordinator], BinarySensorEntity
-):
+class InimBaseBinarySensor(CoordinatorEntity[InimDataUpdateCoordinator], BinarySensorEntity):
     """Base entity sharing the single panel device."""
 
     _attr_has_entity_name = True
@@ -97,9 +102,7 @@ class InimBaseBinarySensor(
 class InimZoneBinarySensor(InimBaseBinarySensor):
     """A binary sensor for a single zone (on = open / in alarm)."""
 
-    def __init__(
-        self, coordinator: InimDataUpdateCoordinator, zone_id: int
-    ) -> None:
+    def __init__(self, coordinator: InimDataUpdateCoordinator, zone_id: int) -> None:
         """Initialize the zone binary sensor."""
         super().__init__(coordinator)
         self._zone_id = zone_id
@@ -190,9 +193,7 @@ class InimAreaAlarmMemoryBinarySensor(InimBaseBinarySensor):
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
-    def __init__(
-        self, coordinator: InimDataUpdateCoordinator, area_id: int
-    ) -> None:
+    def __init__(self, coordinator: InimDataUpdateCoordinator, area_id: int) -> None:
         """Initialize the area alarm-memory binary sensor."""
         super().__init__(coordinator)
         self._area_id = area_id
@@ -247,9 +248,7 @@ class InimFaultFlagBinarySensor(InimBaseBinarySensor):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
 
-    def __init__(
-        self, coordinator: InimDataUpdateCoordinator, flag_key: str
-    ) -> None:
+    def __init__(self, coordinator: InimDataUpdateCoordinator, flag_key: str) -> None:
         """Initialize the per-flag fault binary sensor."""
         super().__init__(coordinator)
         self._flag_key = flag_key
@@ -283,9 +282,7 @@ class InimScenarioBinarySensor(InimBaseBinarySensor):
     _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_entity_registry_enabled_default = False
 
-    def __init__(
-        self, coordinator: InimDataUpdateCoordinator, scenario_id: int
-    ) -> None:
+    def __init__(self, coordinator: InimDataUpdateCoordinator, scenario_id: int) -> None:
         """Initialize the per-scenario binary sensor."""
         super().__init__(coordinator)
         self._scenario_id = scenario_id
@@ -322,3 +319,57 @@ class InimScenarioBinarySensor(InimBaseBinarySensor):
         if scenario is None:
             return None
         return scenario.active
+
+
+class InimSceneActiveBinarySensor(InimBaseBinarySensor):
+    """A RUNNING binary sensor: on when this scenario's arming is active now.
+
+    Computed from the scenario's static partition->mode definition (read once
+    over the read-only TCP 6004 channel) compared against live cgi area state,
+    so MULTIPLE scenarios can read "on" at the same time — the accurate
+    multi-active view the panel's single ``st`` flag cannot provide.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+
+    def __init__(self, coordinator: InimDataUpdateCoordinator, scene_id: int) -> None:
+        """Initialize the multi-active scene sensor."""
+        super().__init__(coordinator)
+        self._scene_id = scene_id
+        entry = coordinator.config_entry
+        self._attr_unique_id = f"{entry.entry_id}_scene_{scene_id}"
+        scenario = self._scenario
+        self._last_label = scenario.label if scenario is not None else f"Scenario {scene_id}"
+
+    @property
+    def _scenario(self) -> Scenario | None:
+        """Return the matching cgi scenario (for its live label), or None."""
+        for scenario in self.coordinator.data.scenarios:
+            if scenario.id == self._scene_id:
+                return scenario
+        return None
+
+    @property
+    def name(self) -> str | None:
+        """Return the live scenario label, falling back to the last-known one."""
+        scenario = self._scenario
+        if scenario is not None:
+            self._last_label = scenario.label
+        return self._last_label
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if this scenario's arming matches live area state."""
+        return self._scene_id in self.coordinator.active_scene_ids()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose the scenario's target partition modes (by area label)."""
+        config = self.coordinator.local_config
+        if config is None:
+            return None
+        scene = next((s for s in config.scenes if s.id == self._scene_id), None)
+        if scene is None:
+            return None
+        labels = {area.id: area.label for area in self.coordinator.data.areas}
+        return {"arms": {labels.get(p, f"area{p}"): m for p, m in scene.arms.items()}}

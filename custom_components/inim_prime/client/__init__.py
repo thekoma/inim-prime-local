@@ -15,6 +15,14 @@ from .const import (
     Command,
     ZoneState,
 )
+from .local6004 import (
+    Local6004Client,
+    Local6004Config,
+    Local6004Error,
+    SceneDef,
+    decode_scene,
+    scene_is_active,
+)
 from .models import (
     FAULT_FLAG_KEYS,
     ApiStats,
@@ -56,4 +64,10 @@ __all__ = [
     "InimConnectionError",
     "InimError",
     "InimPrimeClient",
+    "Local6004Client",
+    "Local6004Config",
+    "Local6004Error",
+    "SceneDef",
+    "decode_scene",
+    "scene_is_active",
 ]

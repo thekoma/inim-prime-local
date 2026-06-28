@@ -21,6 +21,9 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from .client import (
@@ -33,12 +36,15 @@ from .const import (
     CONF_APIKEY,
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
+    CONF_LOCAL_ENABLED,
+    CONF_LOCAL_PASSWORD,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DEFAULT_GROUP_BY_ROOM,
+    DEFAULT_LOCAL_ENABLED,
     DEFAULT_NAME,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
@@ -82,9 +88,7 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return errors
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
         errors: dict[str, str] = {}
 
@@ -97,9 +101,7 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
 
             errors = await self._async_validate(user_input)
             if not errors:
-                return self.async_create_entry(
-                    title=user_input[CONF_NAME], data=user_input
-                )
+                return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
 
         return self.async_show_form(
             step_id="user",
@@ -109,17 +111,13 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_HOST): str,
                     vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
                     vol.Required(CONF_APIKEY): str,
-                    vol.Required(
-                        CONF_USE_HTTPS, default=DEFAULT_USE_HTTPS
-                    ): bool,
+                    vol.Required(CONF_USE_HTTPS, default=DEFAULT_USE_HTTPS): bool,
                 }
             ),
             errors=errors,
         )
 
-    async def async_step_reauth(
-        self, entry_data: dict[str, Any]
-    ) -> ConfigFlowResult:
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Handle reauthentication when the panel rejects the API key."""
         return await self.async_step_reauth_confirm()
 
@@ -184,12 +182,8 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        CONF_NAME, default=suggested.get(CONF_NAME, entry.title)
-                    ): str,
-                    vol.Required(
-                        CONF_HOST, default=suggested.get(CONF_HOST)
-                    ): str,
+                    vol.Required(CONF_NAME, default=suggested.get(CONF_NAME, entry.title)): str,
+                    vol.Required(CONF_HOST, default=suggested.get(CONF_HOST)): str,
                     vol.Required(
                         CONF_PORT,
                         default=suggested.get(CONF_PORT, DEFAULT_PORT),
@@ -223,9 +217,7 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
     PrimeStudio (design doc §2.2/§3).
     """
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         options = dict(self.config_entry.options)
 
@@ -260,9 +252,7 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                 {
                     vol.Required(
                         CONF_SCAN_INTERVAL_IDLE,
-                        default=options.get(
-                            CONF_SCAN_INTERVAL_IDLE, DEFAULT_SCAN_INTERVAL_IDLE
-                        ),
+                        default=options.get(CONF_SCAN_INTERVAL_IDLE, DEFAULT_SCAN_INTERVAL_IDLE),
                     ): int,
                     vol.Required(
                         CONF_SCAN_INTERVAL_ACTIVE,
@@ -276,9 +266,7 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                     ): bool,
                     vol.Required(
                         CONF_LABEL_LANGUAGE,
-                        default=options.get(
-                            CONF_LABEL_LANGUAGE, LABEL_LANGUAGE_AUTO
-                        ),
+                        default=options.get(CONF_LABEL_LANGUAGE, LABEL_LANGUAGE_AUTO),
                     ): SelectSelector(
                         SelectSelectorConfig(
                             options=[LABEL_LANGUAGE_AUTO, *SUPPORTED_LANGUAGES],
@@ -288,10 +276,16 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                     ),
                     vol.Required(
                         CONF_GROUP_BY_ROOM,
-                        default=options.get(
-                            CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM
-                        ),
+                        default=options.get(CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM),
                     ): bool,
+                    vol.Required(
+                        CONF_LOCAL_ENABLED,
+                        default=options.get(CONF_LOCAL_ENABLED, DEFAULT_LOCAL_ENABLED),
+                    ): bool,
+                    vol.Optional(
+                        CONF_LOCAL_PASSWORD,
+                        default=options.get(CONF_LOCAL_PASSWORD, ""),
+                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                 }
             ),
         )

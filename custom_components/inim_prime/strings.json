@@ -58,11 +58,15 @@
           "scan_interval_active": "Active poll interval (seconds)",
           "webhook_enabled": "Enable realtime push (local webhook)",
           "label_language": "Zone label language (for icon guessing)",
-          "group_by_room": "Group zones by room"
+          "group_by_room": "Group zones by room",
+          "local_6004_enabled": "Enable local protocol (multi-active scenes)",
+          "local_6004_password": "Panel LAN password"
         },
         "data_description": {
           "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language.",
-          "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area."
+          "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area.",
+          "local_6004_enabled": "Read the scenario definitions once over the read-only local protocol (TCP 6004) to expose accurate multi-active scene sensors that the HTTP API cannot provide. Read-only; falls back to HTTP-only on any error. Supported on PrimeX 4.x firmware.",
+          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Stored locally; used only to read configuration over TCP 6004."
         }
       }
     }

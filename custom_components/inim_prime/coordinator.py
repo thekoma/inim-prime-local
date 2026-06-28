@@ -24,11 +24,14 @@ from .client import (
     InimApiError,
     InimConnectionError,
     InimPrimeClient,
+    Local6004Client,
+    Local6004Config,
     Output,
     Scenario,
     Version,
     Zone,
     ZoneState,
+    scene_is_active,
 )
 from .const import (
     CONF_SCAN_INTERVAL_ACTIVE,
@@ -101,6 +104,10 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         """Initialize the coordinator."""
         self.client = client
         self._version: Version | None = None
+        # Static config read once over the optional read-only 6004 channel
+        # (multi-active scene definitions + zone->area). None when 6004 is
+        # disabled, unreachable, or the firmware layout is unsupported.
+        self.local_config: Local6004Config | None = None
 
         # Adaptive interval configuration. The legacy ``scan_interval`` option
         # still acts as the idle baseline when the new options are absent, so
@@ -116,9 +123,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             )
         )
         self._active_interval = timedelta(
-            seconds=entry.options.get(
-                CONF_SCAN_INTERVAL_ACTIVE, DEFAULT_SCAN_INTERVAL_ACTIVE
-            )
+            seconds=entry.options.get(CONF_SCAN_INTERVAL_ACTIVE, DEFAULT_SCAN_INTERVAL_ACTIVE)
         )
         self._active_window = DEFAULT_ACTIVE_WINDOW
         self._cancel_decay: Callable[[], None] | None = None
@@ -224,10 +229,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
     def _note_failure(self) -> None:
         """Record a failed cycle and back off after the threshold."""
         self._consecutive_failures += 1
-        if (
-            not self._backed_off
-            and self._consecutive_failures >= FAILURES_BEFORE_BACKOFF
-        ):
+        if not self._backed_off and self._consecutive_failures >= FAILURES_BEFORE_BACKOFF:
             self._backed_off = True
             # Stop hammering: cancel any pending fast-poll decay and pin idle.
             self.async_cancel_decay()
@@ -267,9 +269,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         if self._cancel_decay is not None:
             self._cancel_decay()
 
-        self._cancel_decay = async_call_later(
-            self.hass, self._active_window, self._decay_to_idle
-        )
+        self._cancel_decay = async_call_later(self.hass, self._active_window, self._decay_to_idle)
 
     @callback
     def _decay_to_idle(self, _now: object = None) -> None:
@@ -317,9 +317,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             zone = self._find(data.zones, params.get("id"))
             if zone is None:
                 return None
-            new_state = (
-                ZoneState.ALARM if ev == EV_ZONE_OPEN else ZoneState.READY
-            )
+            new_state = ZoneState.ALARM if ev == EV_ZONE_OPEN else ZoneState.READY
             patched_zone = replace(zone, state=new_state)
             return replace(data, zones=_replace_in_list(data.zones, patched_zone))
 
@@ -333,9 +331,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             # alarm_memory=True, which the alarm panel still renders as
             # TRIGGERED regardless of mode, so the optimistic arm/disarm would
             # not visibly take effect until the next poll reconciles.
-            patched_area = replace(
-                area, mode=new_mode, state=AreaState.READY, alarm_memory=False
-            )
+            patched_area = replace(area, mode=new_mode, state=AreaState.READY, alarm_memory=False)
             return replace(data, areas=_replace_in_list(data.areas, patched_area))
 
         if ev == EV_ALARM:
@@ -354,9 +350,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             except (TypeError, ValueError):
                 value = 1
             patched_output = replace(output, state=value)
-            return replace(
-                data, outputs=_replace_in_list(data.outputs, patched_output)
-            )
+            return replace(data, outputs=_replace_in_list(data.outputs, patched_output))
 
         if ev in (EV_FAULT, EV_TAMPER):
             patched_fault = replace(data.fault, has_faults=True)
@@ -369,6 +363,24 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             return replace(data, fault=patched_fault)
 
         return None
+
+    # ------------------------------------------------------------------
+    # Multi-active scenes (from the optional read-only 6004 channel)
+    # ------------------------------------------------------------------
+    def active_scene_ids(self) -> set[int]:
+        """Return the ids of every scenario currently "active".
+
+        A scenario is active when every partition it targets matches that
+        target mode in the live cgi area state. Empty when 6004 is unavailable.
+        """
+        if self.local_config is None or self.data is None:
+            return set()
+        modes_by_area = {area.id: area.mode for area in self.data.areas}
+        return {
+            scene.id
+            for scene in self.local_config.scenes
+            if scene_is_active(scene.arms, modes_by_area)
+        }
 
     @staticmethod
     def _find[IdT: _HasId](items: list[IdT], raw_id: str | None) -> IdT | None:
@@ -388,6 +400,7 @@ class InimRuntimeData:
 
     client: InimPrimeClient
     coordinator: InimDataUpdateCoordinator
+    local_client: Local6004Client | None = None
 
 
 type InimConfigEntry = ConfigEntry[InimRuntimeData]

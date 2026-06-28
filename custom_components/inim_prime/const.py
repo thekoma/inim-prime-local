@@ -29,6 +29,7 @@ def is_factory_default_area(label: str) -> bool:
     """
     return _FACTORY_AREA_RE.fullmatch(label.strip()) is not None
 
+
 PLATFORMS: Final[list[Platform]] = [
     Platform.ALARM_CONTROL_PANEL,
     Platform.BINARY_SENSOR,
@@ -55,6 +56,14 @@ LABEL_LANGUAGE_AUTO: Final = "auto"
 # Group each zone under a per-room device, guessing the room from the label.
 CONF_GROUP_BY_ROOM: Final = "group_by_room"
 DEFAULT_GROUP_BY_ROOM: Final = True
+
+# Optional read-only local protocol (TCP 6004). Adds multi-active scene sensors
+# (which the cgi cannot express) by reading the static scenario definitions once
+# and comparing them to live area state. The password is the panel LAN password.
+CONF_LOCAL_ENABLED: Final = "local_6004_enabled"
+CONF_LOCAL_PASSWORD: Final = "local_6004_password"
+DEFAULT_LOCAL_ENABLED: Final = False
+LOCAL_6004_PORT: Final = 6004
 
 DEFAULT_PORT: Final = 8080
 DEFAULT_SCAN_INTERVAL: Final = 15
