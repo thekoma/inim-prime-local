@@ -10,7 +10,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import Area, InimApiError, InimConnectionError
+from .client import ApiStatus, Area, InimApiError, InimConnectionError, Scenario
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 
@@ -34,15 +34,23 @@ async def async_setup_entry(
 
     @callback
     def _sync() -> None:
-        """Add a button for every area id not yet known."""
-        new_entities: list[InimClearAlarmMemoryButton] = []
-        for area in coordinator.data.areas:
-            entity = InimClearAlarmMemoryButton(coordinator, area)
+        """Add buttons for area/scenario ids not yet known."""
+        new_entities: list[ButtonEntity] = []
+
+        def _add(entity: ButtonEntity) -> None:
             uid = entity.unique_id
             if uid is None or uid in known:
-                continue
+                return
             known.add(uid)
             new_entities.append(entity)
+
+        for area in coordinator.data.areas:
+            _add(InimClearAlarmMemoryButton(coordinator, area))
+        # One "apply scenario" button per scenario, replacing the old single
+        # active-scenario select (which couldn't express multi-active state).
+        for scenario in coordinator.data.scenarios:
+            _add(InimApplyScenarioButton(coordinator, scenario))
+
         if new_entities:
             async_add_entities(new_entities)
 
@@ -106,6 +114,81 @@ class InimClearAlarmMemoryButton(
         try:
             await self.coordinator.client.clear_alarm_memory(self._area_id)
         except (InimApiError, InimConnectionError) as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        await self.coordinator.async_request_refresh()
+
+
+class InimApplyScenarioButton(
+    CoordinatorEntity[InimDataUpdateCoordinator], ButtonEntity
+):
+    """Button that applies (activates) a single arming scenario.
+
+    Replaces the former single-value "active scenario" select: scenario state is
+    now shown by the multi-active scene binary sensors, while activation is a
+    stateless action — one button per scenario.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self, coordinator: InimDataUpdateCoordinator, scenario: Scenario
+    ) -> None:
+        """Initialize the apply-scenario button."""
+        super().__init__(coordinator)
+        self._scenario_id = scenario.id
+        self._last_label = scenario.label
+        entry = coordinator.config_entry
+        version = coordinator.data.version
+        self._attr_unique_id = f"{entry.entry_id}_scenario_apply_{scenario.id}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            manufacturer="INIM",
+            model=version.primex,
+            sw_version=version.version,
+            name=entry.title,
+        )
+
+    @property
+    def _scenario(self) -> Scenario | None:
+        """Return the current scenario model from coordinator data."""
+        return next(
+            (s for s in self.coordinator.data.scenarios if s.id == self._scenario_id),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return True if the backing scenario is still present."""
+        return super().available and self._scenario is not None
+
+    @property
+    def name(self) -> str | None:
+        """Return the live scenario label, falling back to the last-known one."""
+        scenario = self._scenario
+        if scenario is not None:
+            self._last_label = scenario.label
+        return self._last_label
+
+    async def async_press(self) -> None:
+        """Activate this scenario on the panel."""
+        try:
+            await self.coordinator.client.apply_scenario(self._scenario_id)
+        except InimApiError as err:
+            if err.status == ApiStatus.ZONES_NOT_READY:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="zones_not_ready",
+                ) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        except InimConnectionError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
                 translation_key="command_failed",

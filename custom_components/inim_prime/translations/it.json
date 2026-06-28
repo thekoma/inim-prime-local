@@ -79,19 +79,11 @@
       "open_zone_count": {
         "name": "Zone aperte"
       },
-      "active_scenario": {
-        "name": "Scenario attivo"
-      },
       "api_connections": {
         "name": "Connessioni API"
       },
       "api_last_ip": {
         "name": "Ultimo client API"
-      }
-    },
-    "select": {
-      "active_scenario": {
-        "name": "Scenario attivo"
       }
     },
     "binary_sensor": {

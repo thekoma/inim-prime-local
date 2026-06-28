@@ -5,6 +5,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.inim_prime.client import (
     ApiStatus,
     InimApiError,
@@ -13,12 +18,6 @@ from custom_components.inim_prime.client import (
     Zone,
     ZoneState,
 )
-
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
 from custom_components.inim_prime.const import DOMAIN
 from custom_components.inim_prime.forced_arm import (
     EVENT_FORCED_ARM,
@@ -35,9 +34,7 @@ async def _setup(hass: HomeAssistant, entry: MockConfigEntry, client: AsyncMock)
 
 
 def _eid(hass: HomeAssistant, entry: MockConfigEntry, platform: str, suffix: str) -> str:
-    eid = er.async_get(hass).async_get_entity_id(
-        platform, DOMAIN, f"{entry.entry_id}_{suffix}"
-    )
+    eid = er.async_get(hass).async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{suffix}")
     assert eid is not None
     return eid
 
@@ -65,11 +62,16 @@ async def test_scenario_no_open_zones_arms_cleanly(
     """A scenario with no open zones arms with no bypass."""
     patch_client.get_scenario_open_zones.return_value = []
     entry = await _setup(hass, mock_config_entry, patch_client)
-    sel = _eid(hass, entry, "select", "select_scenario")
+    sel = _eid(hass, entry, "sensor", "sensor_supply_voltage")
 
     result = await _call(hass, {"entity_id": sel, "scenario": "Away"})
 
-    assert result == {"armed": True, "kind": "scenario", "bypassed_zones": [], "unbypassable_zones": []}
+    assert result == {
+        "armed": True,
+        "kind": "scenario",
+        "bypassed_zones": [],
+        "unbypassable_zones": [],
+    }
     patch_client.apply_scenario.assert_awaited_once_with(1)
     patch_client.set_zone_excluded.assert_not_awaited()
 
@@ -82,7 +84,7 @@ async def test_scenario_bypasses_open_zone_then_arms(
     # Re-read shows the zone is now excluded -> bypass took.
     patch_client.get_zones.return_value = [_zone(5, excluded=True)]
     entry = await _setup(hass, mock_config_entry, patch_client)
-    sel = _eid(hass, entry, "select", "select_scenario")
+    sel = _eid(hass, entry, "sensor", "sensor_supply_voltage")
 
     events: list = []
     hass.bus.async_listen(EVENT_FORCED_ARM, lambda e: events.append(e))
@@ -114,7 +116,7 @@ async def test_fail_closed_unbypassable_rolls_back_and_raises(
     ]
     patch_client.get_zones.return_value = [_zone(5, excluded=False), _zone(6, excluded=True)]
     entry = await _setup(hass, mock_config_entry, patch_client)
-    sel = _eid(hass, entry, "select", "select_scenario")
+    sel = _eid(hass, entry, "sensor", "sensor_supply_voltage")
 
     with pytest.raises(HomeAssistantError) as exc:
         await _call(hass, {"entity_id": sel, "scenario": "Away"})
@@ -132,11 +134,9 @@ async def test_allow_partial_arms_with_unbypassable_reported(
     # Write 'succeeds' but re-read shows still not excluded -> unbypassable.
     patch_client.get_zones.return_value = [_zone(5, excluded=False)]
     entry = await _setup(hass, mock_config_entry, patch_client)
-    sel = _eid(hass, entry, "select", "select_scenario")
+    sel = _eid(hass, entry, "sensor", "sensor_supply_voltage")
 
-    result = await _call(
-        hass, {"entity_id": sel, "scenario": "Away", "allow_partial": True}
-    )
+    result = await _call(hass, {"entity_id": sel, "scenario": "Away", "allow_partial": True})
 
     patch_client.apply_scenario.assert_awaited_once_with(1)
     assert result["bypassed_zones"] == []
@@ -169,7 +169,7 @@ async def test_arm_failure_rolls_back_and_translates(
     # Bypass succeeds; the rollback write then fails and must be swallowed.
     patch_client.set_zone_excluded.side_effect = [None, InimConnectionError("rollback")]
     entry = await _setup(hass, mock_config_entry, patch_client)
-    sel = _eid(hass, entry, "select", "select_scenario")
+    sel = _eid(hass, entry, "sensor", "sensor_supply_voltage")
 
     with pytest.raises(HomeAssistantError) as exc:
         await _call(hass, {"entity_id": sel, "scenario": "Away"})
@@ -184,7 +184,7 @@ async def test_arm_failure_connection_error_is_command_failed(
     patch_client.get_scenario_open_zones.return_value = []
     patch_client.apply_scenario.side_effect = InimConnectionError("down")
     entry = await _setup(hass, mock_config_entry, patch_client)
-    sel = _eid(hass, entry, "select", "select_scenario")
+    sel = _eid(hass, entry, "sensor", "sensor_supply_voltage")
 
     with pytest.raises(HomeAssistantError) as exc:
         await _call(hass, {"entity_id": sel, "scenario": "Away"})
@@ -197,7 +197,7 @@ async def test_validation_errors(
     """All the ServiceValidationError branches."""
     patch_client.get_scenario_open_zones.return_value = []
     entry = await _setup(hass, mock_config_entry, patch_client)
-    sel = _eid(hass, entry, "select", "select_scenario")
+    sel = _eid(hass, entry, "sensor", "sensor_supply_voltage")
     panel = _eid(hass, entry, "alarm_control_panel", "area_1")
 
     # two targets -> single_target
@@ -215,7 +215,7 @@ async def test_validation_errors(
         await _call(hass, {"entity_id": sel, "scenario": "Nope"}, response=False)
     assert e3.value.translation_key == "forced_arm_unknown_scenario"
 
-    # select target without scenario and without being an area -> area_or_scenario
+    # non-area inim entity without scenario -> area_or_scenario
     with pytest.raises(ServiceValidationError) as e4:
         await _call(hass, {"entity_id": sel, "mode": "away"}, response=False)
     assert e4.value.translation_key == "forced_arm_area_or_scenario"
@@ -229,16 +229,16 @@ async def test_bad_target_not_inim_entity(
 
     # non-existent entity -> registry returns None
     with pytest.raises(ServiceValidationError) as e1:
-        await _call(hass, {"entity_id": "select.does_not_exist", "scenario": "Away"}, response=False)
+        await _call(
+            hass, {"entity_id": "select.does_not_exist", "scenario": "Away"}, response=False
+        )
     assert e1.value.translation_key == "forced_arm_bad_target"
 
     # entity owned by a different (non-inim) config entry
     other = MockConfigEntry(domain="other")
     other.add_to_hass(hass)
     reg = er.async_get(hass)
-    foreign = reg.async_get_or_create(
-        "sensor", "other", "x", config_entry=other
-    ).entity_id
+    foreign = reg.async_get_or_create("sensor", "other", "x", config_entry=other).entity_id
     with pytest.raises(ServiceValidationError) as e2:
         await _call(hass, {"entity_id": foreign, "scenario": "Away"}, response=False)
     assert e2.value.translation_key == "forced_arm_bad_target"

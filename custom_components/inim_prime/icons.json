@@ -7,19 +7,11 @@
       "open_zone_count": {
         "default": "mdi:door-open"
       },
-      "active_scenario": {
-        "default": "mdi:playlist-check"
-      },
       "api_connections": {
         "default": "mdi:lan-connect"
       },
       "api_last_ip": {
         "default": "mdi:ip-network"
-      }
-    },
-    "select": {
-      "active_scenario": {
-        "default": "mdi:playlist-play"
       }
     },
     "binary_sensor": {

@@ -7,16 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.inim_prime.client import (
-    ZoneState,
     ApiStats,
-    Area,
     Fault,
-    Output,
     Scenario,
     Version,
     Zone,
+    ZoneState,
 )
-
 from custom_components.inim_prime.coordinator import InimData
 from custom_components.inim_prime.sensor import SENSORS, InimSensor
 
@@ -30,9 +27,7 @@ def _build_data(
 ) -> InimData:
     """Build a sample InimData payload."""
     return InimData(
-        version=Version(
-            version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=False
-        ),
+        version=Version(version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=False),
         areas=[],
         zones=zones if zones is not None else [],
         scenarios=scenarios if scenarios is not None else [],
@@ -72,37 +67,26 @@ def test_supply_voltage() -> None:
 def test_open_zone_count() -> None:
     """Open-zone count is the number of zones in the ALARM state."""
     zones = [
-        Zone(id=1, label="A", terminal=1, state=ZoneState.ALARM, alarm_memory=False, excluded=False),
-        Zone(id=2, label="B", terminal=2, state=ZoneState.READY, alarm_memory=False, excluded=False),
-        Zone(id=3, label="C", terminal=3, state=ZoneState.ALARM, alarm_memory=False, excluded=False),
-        Zone(id=4, label="D", terminal=4, state=ZoneState.FAULT, alarm_memory=False, excluded=False),
+        Zone(
+            id=1, label="A", terminal=1, state=ZoneState.ALARM, alarm_memory=False, excluded=False
+        ),
+        Zone(
+            id=2, label="B", terminal=2, state=ZoneState.READY, alarm_memory=False, excluded=False
+        ),
+        Zone(
+            id=3, label="C", terminal=3, state=ZoneState.ALARM, alarm_memory=False, excluded=False
+        ),
+        Zone(
+            id=4, label="D", terminal=4, state=ZoneState.FAULT, alarm_memory=False, excluded=False
+        ),
     ]
     sensor = _make_sensor("open_zone_count", _build_data(zones=zones))
     assert sensor.native_value == 2
 
 
-def test_active_scenario_present() -> None:
-    """Active scenario returns the label of the active scenario."""
-    scenarios = [
-        Scenario(id=1, label="Away", active=False),
-        Scenario(id=2, label="Night", active=True),
-    ]
-    sensor = _make_sensor("active_scenario", _build_data(scenarios=scenarios))
-    assert sensor.native_value == "Night"
-
-
-def test_active_scenario_none() -> None:
-    """Active scenario returns 'none' when nothing is active."""
-    scenarios = [Scenario(id=1, label="Away", active=False)]
-    sensor = _make_sensor("active_scenario", _build_data(scenarios=scenarios))
-    assert sensor.native_value == "none"
-
-
 def test_api_connections_with_stats() -> None:
     """API connections is diagnostic, available, and reports the count."""
-    stats = ApiStats(
-        api="primex", connections=7, last_connection="x", last_ip="192.0.2.9"
-    )
+    stats = ApiStats(api="primex", connections=7, last_connection="x", last_ip="192.0.2.9")
     sensor = _make_sensor("api_connections", _build_data(api_stats=stats))
     assert sensor.native_value == 7
     assert sensor.entity_category == "diagnostic"
@@ -111,9 +95,7 @@ def test_api_connections_with_stats() -> None:
 
 def test_api_last_ip_with_stats() -> None:
     """Last API IP is diagnostic and reports the address."""
-    stats = ApiStats(
-        api="primex", connections=7, last_connection="x", last_ip="192.0.2.9"
-    )
+    stats = ApiStats(api="primex", connections=7, last_connection="x", last_ip="192.0.2.9")
     sensor = _make_sensor("api_last_ip", _build_data(api_stats=stats))
     assert sensor.native_value == "192.0.2.9"
     assert sensor.entity_category == "diagnostic"

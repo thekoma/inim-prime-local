@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.inim_prime.client import (
     Area,
     AreaMode,
@@ -26,10 +29,6 @@ from custom_components.inim_prime.client import (
     Zone,
     ZoneState,
 )
-
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
 def _area(area_id: int, label: str) -> Area:
@@ -187,27 +186,22 @@ async def test_dynamic_output_switch_disabled(
     await _refresh(hass, entry)
 
     registry = er.async_get(hass)
-    entity_id = registry.async_get_entity_id(
-        "switch", "inim_prime", f"{entry.entry_id}_output_2"
-    )
+    entity_id = registry.async_get_entity_id("switch", "inim_prime", f"{entry.entry_id}_output_2")
     assert entity_id is not None
     assert registry.entities[entity_id].disabled_by is not None
 
 
-async def test_new_scenario_in_select_options_without_reload(
+async def test_new_scenario_adds_apply_button_without_reload(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     patch_client: AsyncMock,
     sample_scenarios,
 ) -> None:
-    """A new scenario shows up in the select dropdown without a reload."""
+    """A new scenario gets an 'apply scenario' button without a reload."""
     entry, client = await _setup(hass, mock_config_entry, patch_client)
     registry = er.async_get(hass)
-    entity_id = registry.async_get_entity_id(
-        "select", "inim_prime", f"{entry.entry_id}_select_scenario"
-    )
-    assert entity_id is not None
-    assert "Night" not in hass.states.get(entity_id).attributes["options"]
+    new_uid = f"{entry.entry_id}_scenario_apply_2"
+    assert registry.async_get_entity_id("button", "inim_prime", new_uid) is None
 
     client.get_scenarios.return_value = [
         *sample_scenarios,
@@ -215,7 +209,7 @@ async def test_new_scenario_in_select_options_without_reload(
     ]
     await _refresh(hass, entry)
 
-    assert "Night" in hass.states.get(entity_id).attributes["options"]
+    assert registry.async_get_entity_id("button", "inim_prime", new_uid) is not None
 
 
 async def test_new_scenario_adds_one_binary_sensor(

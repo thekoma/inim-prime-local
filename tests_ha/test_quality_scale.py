@@ -22,7 +22,6 @@ COMPONENT_DIR = Path(__file__).resolve().parents[1] / "custom_components" / "ini
         ("sensor", 0),
         ("alarm_control_panel", 1),
         ("switch", 1),
-        ("select", 1),
         ("button", 1),
     ],
 )
@@ -57,7 +56,6 @@ def test_strings_en_identical() -> None:
 _EXPECTED_SENSOR_KEYS = {
     "supply_voltage",
     "open_zone_count",
-    "active_scenario",
     "api_connections",
     "api_last_ip",
 }
@@ -83,7 +81,6 @@ def test_entity_translations_present(name: str) -> None:
     entity = data["entity"]
     assert set(entity["sensor"]) == _EXPECTED_SENSOR_KEYS
     assert set(entity["binary_sensor"]) == _EXPECTED_BINARY_SENSOR_KEYS
-    assert set(entity["select"]) == {"active_scenario"}
     for domain_block in entity.values():
         for entry in domain_block.values():
             assert entry["name"]
@@ -103,7 +100,6 @@ def test_icons_match_translated_entities() -> None:
     icons = _load("icons.json")["entity"]
     assert set(icons["sensor"]) == _EXPECTED_SENSOR_KEYS
     assert set(icons["binary_sensor"]) == _EXPECTED_BINARY_SENSOR_KEYS
-    assert set(icons["select"]) == {"active_scenario"}
     for domain_block in icons.values():
         for entry in domain_block.values():
             assert entry["default"].startswith("mdi:")

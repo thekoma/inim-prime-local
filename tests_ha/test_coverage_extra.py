@@ -11,15 +11,21 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.inim_prime import webhook as webhook_mod
+from custom_components.inim_prime.alarm_control_panel import InimAlarmControlPanel
+from custom_components.inim_prime.binary_sensor import (
+    InimAreaAlarmMemoryBinarySensor,
+    InimScenarioBinarySensor,
+    InimZoneBinarySensor,
+)
+from custom_components.inim_prime.button import InimClearAlarmMemoryButton
 from custom_components.inim_prime.client import (
     ApiStatus,
     Area,
@@ -34,13 +40,6 @@ from custom_components.inim_prime.client import (
     Zone,
     ZoneState,
 )
-from custom_components.inim_prime.alarm_control_panel import InimAlarmControlPanel
-from custom_components.inim_prime.binary_sensor import (
-    InimZoneBinarySensor,
-    InimAreaAlarmMemoryBinarySensor,
-    InimScenarioBinarySensor,
-)
-from custom_components.inim_prime.button import InimClearAlarmMemoryButton
 from custom_components.inim_prime.const import (
     CONF_APIKEY,
     CONF_SCAN_INTERVAL_ACTIVE,
@@ -57,10 +56,7 @@ from custom_components.inim_prime.coordinator import (
 from custom_components.inim_prime.diagnostics import (
     async_get_config_entry_diagnostics,
 )
-from custom_components.inim_prime.select import InimScenarioSelect
 from custom_components.inim_prime.switch import InimOutputSwitch, InimZoneBypassSwitch
-from custom_components.inim_prime import webhook as webhook_mod
-
 
 VERSION = Version(version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=False)
 
@@ -68,8 +64,25 @@ VERSION = Version(version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=F
 def _data(**overrides) -> InimData:
     base = dict(
         version=VERSION,
-        areas=[Area(id=1, label="Home", mode=AreaMode.DISARMED, state=AreaState.READY, alarm_memory=False)],
-        zones=[Zone(id=1, label="Front Door", terminal=1, state=ZoneState.READY, alarm_memory=False, excluded=False)],
+        areas=[
+            Area(
+                id=1,
+                label="Home",
+                mode=AreaMode.DISARMED,
+                state=AreaState.READY,
+                alarm_memory=False,
+            )
+        ],
+        zones=[
+            Zone(
+                id=1,
+                label="Front Door",
+                terminal=1,
+                state=ZoneState.READY,
+                alarm_memory=False,
+                excluded=False,
+            )
+        ],
         scenarios=[Scenario(id=1, label="Away", active=False)],
         outputs=[Output(id=1, label="Siren", terminal=1, state=0, type=0)],
         fault=Fault(vcc=13.7, raw_fau="0", has_faults=False),
@@ -86,10 +99,8 @@ def _fake_coordinator(data: InimData, client=None) -> SimpleNamespace:
         client=client or AsyncMock(),
         last_update_success=True,
         async_request_refresh=AsyncMock(),
-        async_add_listener=lambda *a, **k: (lambda: None),
-        config_entry=SimpleNamespace(
-            entry_id="abc123", title="INIM Prime", options={}
-        ),
+        async_add_listener=lambda *a, **k: lambda: None,
+        config_entry=SimpleNamespace(entry_id="abc123", title="INIM Prime", options={}),
         hass=SimpleNamespace(config=SimpleNamespace(language="it")),
     )
 
@@ -207,46 +218,6 @@ async def test_zone_bypass_error_maps_command_failed() -> None:
     entity = InimZoneBypassSwitch(coordinator, entry, 1)
     with pytest.raises(HomeAssistantError) as exc:
         await entity.async_turn_on()
-    assert exc.value.translation_key == "command_failed"
-
-
-# ---------------------------------------------------------------------------
-# Select — error translation branches
-# ---------------------------------------------------------------------------
-async def test_select_zones_not_ready() -> None:
-    """Applying a scenario that returns ZONES_NOT_READY maps to that message."""
-    client = AsyncMock()
-    client.apply_scenario.side_effect = InimApiError(ApiStatus.ZONES_NOT_READY)
-    coordinator = _fake_coordinator(_data())
-    coordinator.client = client
-    entity = InimScenarioSelect(coordinator)
-    with pytest.raises(HomeAssistantError) as exc:
-        await entity.async_select_option("Away")
-    assert exc.value.translation_key == "zones_not_ready"
-    coordinator.async_request_refresh.assert_not_awaited()
-
-
-async def test_select_other_api_error_command_failed() -> None:
-    """A non-ZONES_NOT_READY api error maps to command_failed."""
-    client = AsyncMock()
-    client.apply_scenario.side_effect = InimApiError(ApiStatus.NOT_IMPLEMENTED)
-    coordinator = _fake_coordinator(_data())
-    coordinator.client = client
-    entity = InimScenarioSelect(coordinator)
-    with pytest.raises(HomeAssistantError) as exc:
-        await entity.async_select_option("Away")
-    assert exc.value.translation_key == "command_failed"
-
-
-async def test_select_connection_error_command_failed() -> None:
-    """A transport failure maps to command_failed."""
-    client = AsyncMock()
-    client.apply_scenario.side_effect = InimConnectionError("down")
-    coordinator = _fake_coordinator(_data())
-    coordinator.client = client
-    entity = InimScenarioSelect(coordinator)
-    with pytest.raises(HomeAssistantError) as exc:
-        await entity.async_select_option("Away")
     assert exc.value.translation_key == "command_failed"
 
 
@@ -396,7 +367,13 @@ def _push_entry() -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         title="INIM Prime",
-        data={CONF_HOST: "192.0.2.10", CONF_PORT: 8080, CONF_APIKEY: "k", CONF_USE_HTTPS: False, "scan_interval": 15},
+        data={
+            CONF_HOST: "192.0.2.10",
+            CONF_PORT: 8080,
+            CONF_APIKEY: "k",
+            CONF_USE_HTTPS: False,
+            "scan_interval": 15,
+        },
         options={
             CONF_WEBHOOK_ENABLED: True,
             CONF_WEBHOOK_ID: "secret",
@@ -465,9 +442,7 @@ async def test_user_flow_unexpected_exception_is_unknown(hass: HomeAssistant) ->
         "custom_components.inim_prime.config_flow.InimPrimeClient",
         return_value=client,
     ):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_USER}
-        )
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {

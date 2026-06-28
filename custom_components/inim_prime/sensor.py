@@ -35,14 +35,6 @@ class InimSensorEntityDescription(SensorEntityDescription):
     available_fn: Callable[[InimData], bool] = lambda _: True
 
 
-def _active_scenario(data: InimData) -> str:
-    """Return the label of the active scenario, or ``none``."""
-    return next(
-        (scenario.label for scenario in data.scenarios if scenario.active),
-        "none",
-    )
-
-
 SENSORS: tuple[InimSensorEntityDescription, ...] = (
     InimSensorEntityDescription(
         key="supply_voltage",
@@ -59,11 +51,6 @@ SENSORS: tuple[InimSensorEntityDescription, ...] = (
         value_fn=lambda data: sum(
             1 for zone in data.zones if zone.state is ZoneState.ALARM
         ),
-    ),
-    InimSensorEntityDescription(
-        key="active_scenario",
-        translation_key="active_scenario",
-        value_fn=_active_scenario,
     ),
     InimSensorEntityDescription(
         key="api_connections",
