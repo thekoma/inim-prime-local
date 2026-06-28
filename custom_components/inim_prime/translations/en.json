@@ -161,7 +161,7 @@
       "message": "Provide either a scenario or an arm mode, not both."
     },
     "forced_arm_unknown_scenario": {
-      "message": "Unknown scenario '{scenario}'."
+      "message": "Unknown scenario {scenario}."
     },
     "forced_arm_area_or_scenario": {
       "message": "Target an area (with a mode) or the scenario selector (with a scenario)."

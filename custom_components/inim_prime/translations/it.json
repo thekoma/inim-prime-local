@@ -161,7 +161,7 @@
       "message": "Specifica uno scenario oppure una modalità, non entrambi."
     },
     "forced_arm_unknown_scenario": {
-      "message": "Scenario '{scenario}' sconosciuto."
+      "message": "Scenario {scenario} sconosciuto."
     },
     "forced_arm_area_or_scenario": {
       "message": "Indica un'area (con modalità) o il selettore scenari (con uno scenario)."
