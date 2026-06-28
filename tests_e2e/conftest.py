@@ -4,6 +4,7 @@ Requires homeassistant + pytest-homeassistant-custom-component and network acces
 the panel. Reads connection details from environment (docker compose passes .env):
 INIM_HOST, INIM_PORT, INIM_APIKEY, INIM_USE_HTTPS.
 """
+
 from __future__ import annotations
 
 import os
@@ -44,6 +45,15 @@ def panel_config() -> dict:
         "apikey": _Secret(os.environ["INIM_APIKEY"]),
         "use_https": os.environ.get("INIM_USE_HTTPS", "false").lower() == "true",
     }
+
+
+@pytest.fixture
+def local_password() -> str:
+    """Panel LAN password for the read-only 6004 protocol, or skip if unset."""
+    pw = os.environ.get("INIM_LOCAL_PASSWORD")
+    if not pw:
+        pytest.skip("INIM_LOCAL_PASSWORD not set — skipping 6004 E2E")
+    return _Secret(pw)
 
 
 @pytest.fixture(autouse=True)
