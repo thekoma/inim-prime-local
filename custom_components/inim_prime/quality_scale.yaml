@@ -1,10 +1,11 @@
 rules:
   # Bronze
   action-setup:
-    status: exempt
+    status: done
     comment: >-
-      No custom service actions are registered; the integration only sets up
-      entities and a webhook. Nothing to register in async_setup.
+      The inim_prime.arm_forced action is registered once for the domain in
+      async_setup (forced_arm.py / __init__.py), with a voluptuous schema and
+      SupportsResponse.OPTIONAL.
   appropriate-polling:
     status: done
   brands:
@@ -24,10 +25,11 @@ rules:
       No external runtime dependencies (requirements is empty); the async
       client is vendored under client/ and uses HA's async_get_clientsession.
   docs-actions:
-    status: exempt
+    status: done
     comment: >-
-      Custom integration: equivalent docs in repo README/docs/. No custom
-      service actions to document.
+      The inim_prime.arm_forced action is documented in services.yaml (with
+      field selectors + translations) and in the README (forced-arming
+      section with YAML examples).
   docs-high-level-description:
     status: exempt
     comment: 'Custom integration: equivalent docs in repo README/docs/.'

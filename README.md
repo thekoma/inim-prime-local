@@ -109,6 +109,30 @@ Home Assistant's three arm modes map to the panel like this:
 | Arm **night** | Instant / snapshot |
 | **Disarm** | Disarm |
 
+## Forced arming (arm with open zones)
+
+The panel refuses to arm a scenario/area while one of its zones is open ("not ready") — normal arming then raises a clear *zones not ready* error. To arm **anyway**, bypassing the open zones first (the same thing the official app's *"Forzatura inserimento"* does), use the action **`inim_prime.arm_forced`**:
+
+```yaml
+- action: inim_prime.arm_forced
+  data:
+    entity_id: select.inim_prime_active_scenario   # the panel; identifies the config entry
+    scenario: "Ins.Notte"        # apply a scenario by name…
+    # or, targeting an alarm_control_panel area instead:
+    #   entity_id: alarm_control_panel.<area>
+    #   mode: night              # away | home | night
+    allow_partial: false         # default: refuse if a zone can't be bypassed
+  response_variable: forced
+# forced.bypassed_zones / forced.unbypassable_zones list what happened
+```
+
+- **Fail-closed by default**: if an open zone *cannot* be bypassed (e.g. an "unbypassable" zone), nothing is armed and the action raises, naming the zones. Set `allow_partial: true` to bypass what it can and arm anyway (it still reports what stayed open).
+- **Rollback**: if the arm itself is rejected, any zone the action bypassed is automatically re-included — the panel is never left *bypassed but disarmed*.
+- **Never silent**: every forced arm fires an `inim_prime_forced_arm` event (handy for logbook/automations).
+- The bypassed zones stay bypassed until you un-bypass them (per-zone bypass switches) — automatic restore on disarm is planned.
+
+> Forced arming **reduces protection** on the bypassed zones. It is an explicit action, never automatic.
+
 ## Security notes
 
 The panel API is plaintext HTTP on your LAN and the API key is a bearer token. Treat it accordingly:

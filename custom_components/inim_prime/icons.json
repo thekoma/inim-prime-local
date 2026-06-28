@@ -69,5 +69,10 @@
         "default": "mdi:lan-disconnect"
       }
     }
+  },
+  "services": {
+    "arm_forced": {
+      "service": "mdi:shield-lock-open"
+    }
   }
 }

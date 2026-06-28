@@ -150,6 +150,24 @@
     },
     "invalid_scenario": {
       "message": "Unknown scenario: {option}"
+    },
+    "forced_arm_bad_target": {
+      "message": "Entity {entity_id} is not an INIM Prime entity."
+    },
+    "forced_arm_single_target": {
+      "message": "Forced arm accepts exactly one target entity."
+    },
+    "forced_arm_mode_with_scenario": {
+      "message": "Provide either a scenario or an arm mode, not both."
+    },
+    "forced_arm_unknown_scenario": {
+      "message": "Unknown scenario '{scenario}'."
+    },
+    "forced_arm_area_or_scenario": {
+      "message": "Target an area (with a mode) or the scenario selector (with a scenario)."
+    },
+    "forced_arm_unbypassable_zones": {
+      "message": "Cannot force-arm: these zones can't be bypassed and are still open: {zones}."
     }
   },
   "selector": {
@@ -168,6 +186,37 @@
         "ru": "Russian",
         "ar": "Arabic",
         "hi": "Hindi"
+      }
+    },
+    "forced_arm_mode": {
+      "options": {
+        "away": "Away (total)",
+        "home": "Home (partial)",
+        "night": "Night (instant)"
+      }
+    }
+  },
+  "services": {
+    "arm_forced": {
+      "name": "Arm (forced)",
+      "description": "Arm an area or apply a scenario even when zones are open, by bypassing the open zones first.",
+      "fields": {
+        "entity_id": {
+          "name": "Target",
+          "description": "An INIM Prime area (alarm control panel) or the scenario selector — identifies the panel."
+        },
+        "scenario": {
+          "name": "Scenario",
+          "description": "Scenario to apply, by name (e.g. Ins.Notte). Use instead of a mode."
+        },
+        "mode": {
+          "name": "Arm mode",
+          "description": "Arm mode when the target is an area (ignored for a scenario)."
+        },
+        "allow_partial": {
+          "name": "Allow partial arm",
+          "description": "Arm even if some open zones cannot be bypassed (reports which stayed open). Off = refuse if any cannot be bypassed."
+        }
       }
     }
   }

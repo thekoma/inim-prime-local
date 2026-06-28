@@ -1,0 +1,26 @@
+arm_forced:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: inim_prime
+          domain:
+            - alarm_control_panel
+            - select
+    scenario:
+      example: "Ins.Notte"
+      selector:
+        text:
+    mode:
+      selector:
+        select:
+          translation_key: forced_arm_mode
+          options:
+            - away
+            - home
+            - night
+    allow_partial:
+      default: false
+      selector:
+        boolean:

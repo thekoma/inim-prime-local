@@ -150,6 +150,24 @@
     },
     "invalid_scenario": {
       "message": "Scenario sconosciuto: {option}"
+    },
+    "forced_arm_bad_target": {
+      "message": "L'entità {entity_id} non appartiene a INIM Prime."
+    },
+    "forced_arm_single_target": {
+      "message": "L'inserimento forzato accetta una sola entità target."
+    },
+    "forced_arm_mode_with_scenario": {
+      "message": "Specifica uno scenario oppure una modalità, non entrambi."
+    },
+    "forced_arm_unknown_scenario": {
+      "message": "Scenario '{scenario}' sconosciuto."
+    },
+    "forced_arm_area_or_scenario": {
+      "message": "Indica un'area (con modalità) o il selettore scenari (con uno scenario)."
+    },
+    "forced_arm_unbypassable_zones": {
+      "message": "Impossibile inserire forzato: queste zone non sono escludibili e restano aperte: {zones}."
     }
   },
   "selector": {
@@ -168,6 +186,37 @@
         "ru": "Russo",
         "ar": "Arabo",
         "hi": "Hindi"
+      }
+    },
+    "forced_arm_mode": {
+      "options": {
+        "away": "Totale (away)",
+        "home": "Parziale (home)",
+        "night": "Istantaneo (night)"
+      }
+    }
+  },
+  "services": {
+    "arm_forced": {
+      "name": "Inserimento forzato",
+      "description": "Inserisce un'area o applica uno scenario anche con zone aperte, escludendo prima le zone aperte.",
+      "fields": {
+        "entity_id": {
+          "name": "Target",
+          "description": "Un'area INIM Prime (pannello allarme) o il selettore scenari — individua la centrale."
+        },
+        "scenario": {
+          "name": "Scenario",
+          "description": "Scenario da applicare, per nome (es. Ins.Notte). In alternativa alla modalità."
+        },
+        "mode": {
+          "name": "Modalità d'inserimento",
+          "description": "Modalità quando il target è un'area (ignorata per uno scenario)."
+        },
+        "allow_partial": {
+          "name": "Consenti inserimento parziale",
+          "description": "Inserisce anche se alcune zone aperte non sono escludibili (segnala quali restano aperte). Off = rifiuta se anche una non è escludibile."
+        }
       }
     }
   }

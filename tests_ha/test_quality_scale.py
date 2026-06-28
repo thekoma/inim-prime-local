@@ -65,6 +65,12 @@ _EXPECTED_EXCEPTION_KEYS = {
     "zones_not_ready",
     "command_failed",
     "invalid_scenario",
+    "forced_arm_bad_target",
+    "forced_arm_single_target",
+    "forced_arm_mode_with_scenario",
+    "forced_arm_unknown_scenario",
+    "forced_arm_area_or_scenario",
+    "forced_arm_unbypassable_zones",
 }
 
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .client import InimPrimeClient
 from .const import (
@@ -14,6 +16,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_USE_HTTPS,
+    DOMAIN,
     PLATFORMS,
 )
 from .coordinator import (
@@ -21,7 +24,16 @@ from .coordinator import (
     InimDataUpdateCoordinator,
     InimRuntimeData,
 )
+from .forced_arm import async_register_services
 from .webhook import async_register_webhook, async_unregister_webhook
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up integration-wide services (registered once for the domain)."""
+    async_register_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool:
