@@ -174,6 +174,13 @@ make ha-unit   # Home Assistant integration tests
 make e2e       # live end-to-end (needs a reachable panel; reads .env)
 ```
 
+**Pre-commit gates.** A [`.pre-commit-config.yaml`](.pre-commit-config.yaml) mirrors the CI *Validate* checks locally so a failing push is caught before it reaches CI: `ruff` on every commit, and `mypy --strict` + the full `pytest` suite (100% coverage) at push time. The pytest guardrails also replicate the common **hassfest** failures (translation placeholders/key-parity, `services.yaml`↔`strings.json` drift, manifest key order). Enable with:
+
+```bash
+pip install pre-commit
+pre-commit install --install-hooks   # with the dev test env on PATH
+```
+
 ## Alternatives and prior art
 
 This project is local-first and specific to INIM **Prime / PrimeX** over the on-board HTTP API. If it doesn't fit your setup, these community projects are worth a look:

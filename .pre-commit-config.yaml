@@ -1,0 +1,43 @@
+# Local quality gates mirroring the CI "Validate" workflow, so a failing push is
+# caught before it reaches GitHub Actions.
+#
+#   pip install pre-commit            # (or: pipx install pre-commit)
+#   pre-commit install --install-hooks   # installs pre-commit + pre-push hooks
+#
+# Hooks use language: system, so the test tools must be on PATH — activate the
+# dev virtualenv first (homeassistant + ruff/mypy/pytest, as in validate.yml).
+#
+# ruff runs on every commit (fast). mypy + the full pytest suite run at PUSH
+# time (they need the HA test env and are slower). hassfest's full ruleset still
+# runs in CI, but its common failures — translation placeholders/key-parity,
+# services<->strings drift, manifest key order — are covered by the pytest
+# guardrails in tests_ha/test_quality_scale.py, so pre-push catches them too.
+default_install_hook_types: [pre-commit, pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (custom_components)
+        entry: ruff check custom_components
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: mypy
+        name: mypy --strict (custom_components/inim_prime)
+        entry: mypy custom_components/inim_prime
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: pytest
+        name: pytest + 100% coverage (tests + tests_ha)
+        entry: >-
+          pytest tests tests_ha
+          --cov=custom_components/inim_prime
+          --cov-report=term-missing --cov-fail-under=100 -q
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
