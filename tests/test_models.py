@@ -27,6 +27,28 @@ def test_version_from_raw(load_fixture):
     assert v.servizio is False
 
 
+def test_version_firmware_and_model_from_cgi(load_fixture):
+    """Firmware comes from primex (4.07), NOT the API-version field (1.0.1);
+    the generic 'PXxxx' template resolves to the friendly family name."""
+    v = Version.from_raw(load_fixture("version")["data"])
+    assert v.firmware == "4.07"
+    assert v.model_name == "PrimeX"  # "PXxxx" has no real digits
+
+
+def test_version_model_precise_variant():
+    """A model string carrying digits (e.g. from the 6004 channel) is kept."""
+    v = Version(version="1.0.1", verhttp="1.0.0", primex="4.07 PX020", servizio=False)
+    assert v.firmware == "4.07"
+    assert v.model_name == "PX020"
+
+
+def test_version_firmware_falls_back_to_version_when_no_primex():
+    """With an empty primex, firmware degrades to the version field."""
+    v = Version(version="9.9", verhttp="1.0", primex="", servizio=False)
+    assert v.firmware == "9.9"
+    assert v.model_name == "PrimeX"
+
+
 def test_zone_open_and_strip(load_fixture):
     zones = [Zone.from_raw(z) for z in load_fixture("zones")["data"]["zone"]]
     bagno = next(z for z in zones if z.id == 0)

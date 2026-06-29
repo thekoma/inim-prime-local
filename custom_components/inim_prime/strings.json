@@ -79,6 +79,9 @@
       "open_zone_count": {
         "name": "Open zones"
       },
+      "api_version": {
+        "name": "API version"
+      },
       "api_connections": {
         "name": "API connections"
       },

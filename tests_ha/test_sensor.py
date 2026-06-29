@@ -27,7 +27,7 @@ def _build_data(
 ) -> InimData:
     """Build a sample InimData payload."""
     return InimData(
-        version=Version(version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=False),
+        version=Version(version="1.0.1", verhttp="1.0.0", primex="4.07 PX500", servizio=False),
         areas=[],
         zones=zones if zones is not None else [],
         scenarios=scenarios if scenarios is not None else [],
@@ -39,15 +39,20 @@ def _build_data(
 
 def _fake_coordinator(data: InimData) -> SimpleNamespace:
     """Return a minimal stand-in for the coordinator."""
-    return SimpleNamespace(data=data, last_update_success=True)
+    entry = SimpleNamespace(entry_id="abc123", title="INIM Prime")
+    return SimpleNamespace(
+        data=data,
+        config_entry=entry,
+        local_config=None,
+        last_update_success=True,
+    )
 
 
 def _make_sensor(key: str, data: InimData) -> InimSensor:
     """Instantiate a single sensor by description key bound to fake state."""
     description = next(d for d in SENSORS if d.key == key)
     coordinator = _fake_coordinator(data)
-    entry = SimpleNamespace(entry_id="abc123", title="INIM Prime")
-    return InimSensor(coordinator, entry, description)  # type: ignore[arg-type]
+    return InimSensor(coordinator, coordinator.config_entry, description)  # type: ignore[arg-type]
 
 
 def test_supply_voltage() -> None:
@@ -115,6 +120,15 @@ def test_device_info_shared() -> None:
     sensor = _make_sensor("supply_voltage", _build_data())
     assert sensor.device_info["identifiers"] == {("inim_prime", "abc123")}
     assert sensor.device_info["manufacturer"] == "INIM"
-    assert sensor.device_info["model"] == "4.07 PX500"
+    # model is the parsed variant (not the redundant "4.07 PX500"), firmware is
+    # the real panel firmware from primex, NOT the API version field (1.0.1).
+    assert sensor.device_info["model"] == "PX500"
     assert sensor.device_info["sw_version"] == "4.07"
     assert sensor.device_info["name"] == "INIM Prime"
+
+
+def test_api_version_sensor_reports_api_field() -> None:
+    """The API-version diagnostic sensor exposes the cgi 'version' (1.0.1)."""
+    sensor = _make_sensor("api_version", _build_data())
+    assert sensor.native_value == "1.0.1"
+    assert sensor.entity_description.entity_category is not None

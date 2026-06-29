@@ -35,6 +35,7 @@ def _make_coordinator(
     coordinator = MagicMock()
     coordinator.client = AsyncMock()
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.local_config = None
     coordinator.config_entry = MagicMock(entry_id="abc123", title="INIM Prime")
     coordinator.data = InimData(
         version=sample_version,
@@ -94,8 +95,8 @@ def test_button_properties(sample_version, two_areas) -> None:
     device = button.device_info
     assert device["identifiers"] == {(DOMAIN, "abc123")}
     assert device["manufacturer"] == "INIM"
-    assert device["model"] == sample_version.primex
-    assert device["sw_version"] == sample_version.version
+    assert device["model"] == "PX500"  # parsed model variant
+    assert device["sw_version"] == sample_version.firmware  # "4.07", not API 1.0.1
     assert device["name"] == "INIM Prime"
 
 

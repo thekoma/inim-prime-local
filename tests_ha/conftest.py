@@ -71,8 +71,10 @@ def mock_config_entry(entry_data: dict) -> MockConfigEntry:
 def sample_version() -> Version:
     """Return a sample Version."""
     return Version(
-        version="4.07",
-        verhttp="1.0",
+        # ``version`` is the local API version (NOT the firmware); the real
+        # firmware (4.07) lives in ``primex`` — mirrors the live panel response.
+        version="1.0.1",
+        verhttp="1.0.0",
         primex="4.07 PX500",
         servizio=False,
     )

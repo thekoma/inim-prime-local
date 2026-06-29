@@ -14,14 +14,18 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import ApiStatus, InimApiError, InimConnectionError, Output, Zone
 from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
-from .device import group_zones_by_room, label_language, room_device_info
+from .device import (
+    group_zones_by_room,
+    label_language,
+    panel_device_info,
+    room_device_info,
+)
 from .room_guess import guess_room
 
 # Output/bypass toggles issue panel writes; the cgi is single-threaded, so
@@ -88,14 +92,7 @@ class InimOutputSwitch(CoordinatorEntity[InimDataUpdateCoordinator], SwitchEntit
         super().__init__(coordinator)
         self._output_id = output_id
         self._attr_unique_id = f"{entry.entry_id}_output_{output_id}"
-        version = coordinator.data.version
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="INIM",
-            model=version.primex,
-            sw_version=version.version,
-            name=entry.title,
-        )
+        self._attr_device_info = panel_device_info(coordinator)
 
     @property
     def _output(self) -> Output | None:
@@ -175,14 +172,7 @@ class InimZoneBypassSwitch(
         super().__init__(coordinator)
         self._zone_id = zone_id
         self._attr_unique_id = f"{entry.entry_id}_zone_bypass_{zone_id}"
-        version = coordinator.data.version
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="INIM",
-            model=version.primex,
-            sw_version=version.version,
-            name=entry.title,
-        )
+        self._attr_device_info = panel_device_info(coordinator)
         # Follow the zone into its per-room device so the bypass switch lives
         # alongside the zone's binary_sensor (same room grouping).
         if group_zones_by_room(coordinator):

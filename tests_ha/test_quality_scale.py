@@ -56,6 +56,7 @@ def test_strings_en_identical() -> None:
 _EXPECTED_SENSOR_KEYS = {
     "supply_voltage",
     "open_zone_count",
+    "api_version",
     "api_connections",
     "api_last_ip",
 }

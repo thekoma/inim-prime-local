@@ -82,6 +82,7 @@ def fake_coordinator(version, outputs, zones):
         client=client,
         config_entry=SimpleNamespace(entry_id="abc123", title="INIM Prime", options={}),
         hass=SimpleNamespace(config=SimpleNamespace(language="en")),
+        local_config=None,
         last_update_success=True,
         async_request_refresh=AsyncMock(),
         async_add_listener=lambda *a, **k: (lambda: None),
@@ -106,7 +107,7 @@ def test_output_switch_state_mapping(fake_coordinator, entry):
     di = off.device_info
     assert di["identifiers"] == {("inim_prime", "abc123")}
     assert di["manufacturer"] == "INIM"
-    assert di["model"] == "4.07 PX500"
+    assert di["model"] == "PX500"
     assert di["sw_version"] == "4.07"
     assert di["name"] == "INIM Prime"
 

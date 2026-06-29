@@ -27,6 +27,29 @@ class Version:
             servizio=bool(d["servizio"]),
         )
 
+    @property
+    def firmware(self) -> str:
+        """Real panel firmware version, e.g. ``4.07``.
+
+        The cgi field names are misleading: ``version`` is the local *API*
+        version (e.g. ``1.0.1``), not the firmware. The firmware is the first
+        token of ``primex`` (e.g. ``"4.07 PXxxx"`` -> ``"4.07"``).
+        """
+        token = self.primex.split(" ", 1)[0] if self.primex else ""
+        return token or self.version
+
+    @property
+    def model_name(self) -> str:
+        """Panel model, e.g. ``PX020``.
+
+        The cgi returns a generic ``PXxxx`` template (no real digits); only a
+        model carrying digits (e.g. read over the local 6004 channel) is the
+        precise variant, otherwise we show the friendly family name ``PrimeX``.
+        """
+        parts = self.primex.split(" ", 1)
+        model = parts[1].strip() if len(parts) > 1 else ""
+        return model if any(c.isdigit() for c in model) else "PrimeX"
+
 
 @dataclass(frozen=True)
 class Zone:

@@ -13,14 +13,13 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import EntityCategory, UnitOfElectricPotential
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import ZoneState
-from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimData, InimDataUpdateCoordinator
+from .device import panel_device_info
 
 # Read-only platform: all state comes from the coordinator, no panel writes,
 # so updates need not be serialized.
@@ -51,6 +50,15 @@ SENSORS: tuple[InimSensorEntityDescription, ...] = (
         value_fn=lambda data: sum(
             1 for zone in data.zones if zone.state is ZoneState.ALARM
         ),
+    ),
+    InimSensorEntityDescription(
+        key="api_version",
+        translation_key="api_version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # The cgi ``version`` field is the local API version (e.g. 1.0.1), NOT
+        # the panel firmware — exposed here, correctly labelled, so it is no
+        # longer mistaken for the firmware (which is the device's sw_version).
+        value_fn=lambda data: data.version.version,
     ),
     InimSensorEntityDescription(
         key="api_connections",
@@ -102,14 +110,7 @@ class InimSensor(CoordinatorEntity[InimDataUpdateCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_sensor_{description.key}"
-        version = coordinator.data.version
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="INIM",
-            model=version.primex,
-            sw_version=version.version,
-            name=entry.title,
-        )
+        self._attr_device_info = panel_device_info(coordinator)
 
     @property
     def native_value(self) -> StateType:

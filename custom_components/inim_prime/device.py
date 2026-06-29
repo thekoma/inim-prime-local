@@ -16,6 +16,36 @@ from .const import (
 from .coordinator import InimDataUpdateCoordinator
 
 
+def panel_device_info(coordinator: InimDataUpdateCoordinator) -> DeviceInfo:
+    """Build the DeviceInfo for the panel hub device, with correct versions.
+
+    Firmware/model come from the cgi ``version`` (parsed correctly: firmware
+    from ``primex``, not the API-version field). When the read-only 6004 channel
+    has supplied the precise firmware string (e.g. ``"4.07 PX020"``) we prefer it
+    for the exact model variant the cgi only templates as ``PXxxx``.
+    """
+    entry = coordinator.config_entry
+    version = coordinator.data.version
+    firmware = version.firmware
+    model = version.model_name
+
+    local = coordinator.local_config
+    if local is not None and local.firmware:
+        parts = local.firmware.split(" ", 1)
+        if parts[0]:
+            firmware = parts[0]
+        if len(parts) > 1 and any(c.isdigit() for c in parts[1]):
+            model = parts[1].strip()
+
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id)},
+        manufacturer="INIM",
+        model=model,
+        sw_version=firmware,
+        name=entry.title,
+    )
+
+
 def label_language(coordinator: InimDataUpdateCoordinator) -> str:
     """Resolve the language used to guess zone device classes/rooms from labels.
 

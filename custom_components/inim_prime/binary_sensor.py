@@ -10,14 +10,18 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import FAULT_FLAG_KEYS, Area, Scenario, Zone, ZoneState
-from .const import DOMAIN, is_factory_default_area
+from .const import is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
-from .device import group_zones_by_room, label_language, room_device_info
+from .device import (
+    group_zones_by_room,
+    label_language,
+    panel_device_info,
+    room_device_info,
+)
 from .room_guess import guess_room
 from .zone_guess import guess_device_class
 
@@ -88,15 +92,7 @@ class InimBaseBinarySensor(CoordinatorEntity[InimDataUpdateCoordinator], BinaryS
     def __init__(self, coordinator: InimDataUpdateCoordinator) -> None:
         """Initialize the base entity."""
         super().__init__(coordinator)
-        entry = coordinator.config_entry
-        version = coordinator.data.version
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="INIM",
-            model=version.primex,
-            sw_version=version.version,
-            name=entry.title,
-        )
+        self._attr_device_info = panel_device_info(coordinator)
 
 
 class InimZoneBinarySensor(InimBaseBinarySensor):

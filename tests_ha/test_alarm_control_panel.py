@@ -145,7 +145,7 @@ def test_static_properties(entity_factory) -> None:
     entry_id = entity.coordinator.config_entry.entry_id
     assert entity.unique_id == f"{entry_id}_area_1"
     assert entity.device_info["manufacturer"] == "INIM"
-    assert entity.device_info["model"] == "4.07 PX500"
+    assert entity.device_info["model"] == "PX500"
     assert entity.device_info["sw_version"] == "4.07"
 
 

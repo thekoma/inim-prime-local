@@ -11,7 +11,6 @@ from homeassistant.components.alarm_control_panel.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -26,6 +25,7 @@ from .client import (
 )
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
+from .device import panel_device_info
 
 # Arm/disarm issues panel writes; the cgi is single-threaded, so serialize
 # commands to one in flight at a time.
@@ -94,15 +94,8 @@ class InimAlarmControlPanel(
         self._area_id = area_id
         self._optimistic_state: AlarmControlPanelState | None = None
         entry = coordinator.config_entry
-        version = coordinator.data.version
         self._attr_unique_id = f"{entry.entry_id}_area_{area_id}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="INIM",
-            model=version.primex,
-            sw_version=version.version,
-            name=entry.title,
-        )
+        self._attr_device_info = panel_device_info(coordinator)
         label = self._area.label if self._area else None
         self._last_label = label
         # Hide unused, factory-default areas ("AREA 006"..) by default. The

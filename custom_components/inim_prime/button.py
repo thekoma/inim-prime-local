@@ -6,13 +6,13 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import ApiStatus, Area, InimApiError, InimConnectionError, Scenario
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
+from .device import panel_device_info
 
 # Clearing alarm memory issues a panel write; the cgi is single-threaded, so
 # serialize commands to one in flight at a time.
@@ -78,15 +78,8 @@ class InimClearAlarmMemoryButton(
         if is_factory_default_area(area.label):
             self._attr_entity_registry_enabled_default = False
         entry = coordinator.config_entry
-        version = coordinator.data.version
         self._attr_unique_id = f"{entry.entry_id}_button_{area.id}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="INIM",
-            model=version.primex,
-            sw_version=version.version,
-            name=entry.title,
-        )
+        self._attr_device_info = panel_device_info(coordinator)
 
     @property
     def _area(self) -> Area | None:
@@ -142,15 +135,8 @@ class InimApplyScenarioButton(
         self._scenario_id = scenario.id
         self._last_label = scenario.label
         entry = coordinator.config_entry
-        version = coordinator.data.version
         self._attr_unique_id = f"{entry.entry_id}_scenario_apply_{scenario.id}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="INIM",
-            model=version.primex,
-            sw_version=version.version,
-            name=entry.title,
-        )
+        self._attr_device_info = panel_device_info(coordinator)
 
     @property
     def _scenario(self) -> Scenario | None:

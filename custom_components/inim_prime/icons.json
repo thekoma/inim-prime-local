@@ -7,6 +7,9 @@
       "open_zone_count": {
         "default": "mdi:door-open"
       },
+      "api_version": {
+        "default": "mdi:api"
+      },
       "api_connections": {
         "default": "mdi:lan-connect"
       },

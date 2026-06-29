@@ -93,6 +93,7 @@ def coordinator(inim_data: InimData) -> SimpleNamespace:
         data=inim_data,
         config_entry=entry,
         hass=hass,
+        local_config=None,
         last_update_success=True,
     )
 
@@ -152,7 +153,7 @@ def test_zone_without_room_uses_panel_device(coordinator: SimpleNamespace) -> No
     info = zone.device_info
     assert info["identifiers"] == {("inim_prime", "abc123")}
     assert info["manufacturer"] == "INIM"
-    assert info["model"] == "4.07 PX500"
+    assert info["model"] == "PX500"
     assert info["sw_version"] == "4.07"
     assert info["name"] == "INIM Prime"
 
@@ -178,6 +179,7 @@ def test_zone_grouping_disabled_uses_panel_device(inim_data: InimData) -> None:
         data=inim_data,
         config_entry=entry,
         hass=SimpleNamespace(config=SimpleNamespace(language="it")),
+        local_config=None,
         last_update_success=True,
     )
     zone = InimZoneBinarySensor(coord, 1)  # "Porta ingresso"
@@ -234,7 +236,7 @@ def test_area_alarm_memory_enabled_default(inim_data: InimData) -> None:
         api_stats=None,
     )
     coordinator = SimpleNamespace(
-        data=data, config_entry=entry, last_update_success=True
+        data=data, config_entry=entry, local_config=None, last_update_success=True
     )
 
     factory = InimAreaAlarmMemoryBinarySensor(coordinator, 6)
