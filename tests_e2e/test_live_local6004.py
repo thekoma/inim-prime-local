@@ -12,7 +12,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.inim_prime.client import Local6004Client
 from custom_components.inim_prime.const import (
-    CONF_LOCAL_ENABLED,
     CONF_LOCAL_PASSWORD,
     DOMAIN,
 )
@@ -36,14 +35,27 @@ async def test_local6004_reads_scenes(panel_config, local_password) -> None:
         print(f"  scene {scene.id}: {scene.arms}")
 
 
+async def test_local6004_reads_event_log(panel_config, local_password) -> None:
+    """Read and decode the panel event log straight off the panel (read-only)."""
+    client = Local6004Client(panel_config["host"], str(local_password))
+    events = await client.async_read_event_log()
+
+    assert events, "expected at least one event-log record"
+    for e in events[-1:]:
+        assert "time" in e and "event" in e
+    print(f"\n[6004] event log: {len(events)} records; most recent:")
+    for e in events[-8:]:
+        extra = f" scen={e['scenario']}" if "scenario" in e else ""
+        print(f"  {e['time']}  {e['event']:<26} part={e['partitions']}{extra}")
+
+
 async def test_integration_creates_multiactive_scene_sensors(
     hass, panel_config, local_password
 ) -> None:
-    """Set up the integration with 6004 enabled and assert scene sensors exist."""
+    """Set up the integration (mandatory 6004) and assert scene sensors exist."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data=panel_config,
-        options={CONF_LOCAL_ENABLED: True, CONF_LOCAL_PASSWORD: str(local_password)},
+        data={**panel_config, CONF_LOCAL_PASSWORD: str(local_password)},
         title="INIM PrimeX (E2E 6004)",
     )
     entry.add_to_hass(hass)

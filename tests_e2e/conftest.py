@@ -36,7 +36,11 @@ class _Secret(str):
 
 @pytest.fixture
 def panel_config() -> dict:
-    """Build config-entry data from env, or skip if the panel isn't configured."""
+    """Build config-entry data from env, or skip if the panel isn't configured.
+
+    The 6004 LAN password is mandatory for setup; defaults to the panel factory
+    default 'pass' when INIM_LOCAL_PASSWORD is not set.
+    """
     if not all(os.environ.get(k) for k in REQUIRED):
         pytest.skip("INIM_HOST/INIM_APIKEY not set — skipping live E2E")
     return {
@@ -44,6 +48,7 @@ def panel_config() -> dict:
         "port": int(os.environ.get("INIM_PORT", "8080")),
         "apikey": _Secret(os.environ["INIM_APIKEY"]),
         "use_https": os.environ.get("INIM_USE_HTTPS", "false").lower() == "true",
+        "local_6004_password": _Secret(os.environ.get("INIM_LOCAL_PASSWORD", "pass")),
     }
 
 
