@@ -56,12 +56,12 @@ LABEL_LANGUAGE_AUTO: Final = "auto"
 CONF_GROUP_BY_ROOM: Final = "group_by_room"
 DEFAULT_GROUP_BY_ROOM: Final = True
 
-# Optional read-only local protocol (TCP 6004). Adds multi-active scene sensors
-# (which the cgi cannot express) by reading the static scenario definitions once
-# and comparing them to live area state. The password is the panel LAN password.
-CONF_LOCAL_ENABLED: Final = "local_6004_enabled"
+# Read-only local protocol (TCP 6004) — MANDATORY. Reads the static scenario
+# definitions (for accurate multi-active scene sensors the cgi cannot express),
+# zone->area, and the precise panel model. The password is the panel LAN password
+# (default "pass"), validated at config time; setup fails without it.
 CONF_LOCAL_PASSWORD: Final = "local_6004_password"
-DEFAULT_LOCAL_ENABLED: Final = False
+DEFAULT_LOCAL_PASSWORD: Final = "pass"
 LOCAL_6004_PORT: Final = 6004
 
 DEFAULT_PORT: Final = 8080

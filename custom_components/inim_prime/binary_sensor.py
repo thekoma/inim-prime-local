@@ -67,12 +67,10 @@ async def async_setup_entry(
             _add(InimZoneBinarySensor(coordinator, zone.id))
         for area in coordinator.data.areas:
             _add(InimAreaAlarmMemoryBinarySensor(coordinator, area.id))
-        for scenario in coordinator.data.scenarios:
-            _add(InimScenarioBinarySensor(coordinator, scenario.id))
-
-        # Multi-active scene sensors (only when the read-only 6004 channel
-        # supplied the scenario definitions). These correctly reflect several
-        # simultaneously-active scenes, unlike the panel's single ``st`` flag.
+        # Multi-active scene sensors, enabled by default. Computed from the 6004
+        # scenario definitions vs live area state, so several scenes can read
+        # "on" at once — the accurate view the panel's single ``st`` flag cannot
+        # give. The 6004 channel is mandatory, so local_config is always present.
         if coordinator.local_config is not None:
             for scene in coordinator.local_config.scenes:
                 _add(InimSceneActiveBinarySensor(coordinator, scene.id))
@@ -259,62 +257,6 @@ class InimFaultFlagBinarySensor(InimBaseBinarySensor):
     def is_on(self) -> bool:
         """Return True if this specific fault flag is set."""
         return self.coordinator.data.fault.flags.get(self._flag_key, False)
-
-
-class InimScenarioBinarySensor(InimBaseBinarySensor):
-    """A RUNNING binary sensor reflecting a scenario's panel ``st`` flag.
-
-    Disabled by default. On a live PrimeX (fw 4.07) the panel only ever sets a
-    scenario's ``st=1`` for the system-wide *Total* arm/disarm macro: single-area
-    scenarios (Ins.Box, Dis.Esterno, ...) never flip their own ``st``, not even
-    momentarily — verified by sampling ``get_scenarios_status`` at ~10 reads/s
-    across a full Box arm->disarm->arm cycle while the partition ``am`` changed
-    correctly. The authoritative arm state is therefore the per-area
-    ``alarm_control_panel``; these per-scenario sensors only carry signal for the
-    Total macro, so they are off by default to avoid implying a state the panel
-    does not actually report.
-    """
-
-    _attr_device_class = BinarySensorDeviceClass.RUNNING
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(self, coordinator: InimDataUpdateCoordinator, scenario_id: int) -> None:
-        """Initialize the per-scenario binary sensor."""
-        super().__init__(coordinator)
-        self._scenario_id = scenario_id
-        entry = coordinator.config_entry
-        self._attr_unique_id = f"{entry.entry_id}_scenario_active_{scenario_id}"
-        scenario = self._scenario
-        self._last_label = scenario.label if scenario is not None else None
-
-    @property
-    def _scenario(self) -> Scenario | None:
-        """Return the current scenario model from coordinator data, or None."""
-        for scenario in self.coordinator.data.scenarios:
-            if scenario.id == self._scenario_id:
-                return scenario
-        return None
-
-    @property
-    def available(self) -> bool:
-        """Return whether the scenario is still present in coordinator data."""
-        return super().available and self._scenario is not None
-
-    @property
-    def name(self) -> str | None:
-        """Return the live scenario label, falling back to the last-known one."""
-        scenario = self._scenario
-        if scenario is not None:
-            self._last_label = scenario.label
-        return self._last_label
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return True if the scenario is currently active."""
-        scenario = self._scenario
-        if scenario is None:
-            return None
-        return scenario.active
 
 
 class InimSceneActiveBinarySensor(InimBaseBinarySensor):

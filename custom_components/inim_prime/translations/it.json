@@ -9,10 +9,12 @@
           "host": "Host",
           "port": "Porta",
           "apikey": "Chiave API",
-          "use_https": "Usa HTTPS"
+          "use_https": "Usa HTTPS",
+          "local_6004_password": "Password LAN della centrale"
         },
         "data_description": {
-          "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\")."
+          "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\").",
+          "local_6004_password": "La password LAN/di programmazione della centrale (default 'pass'). Obbligatoria: letta via protocollo locale (TCP 6004) per le scene multi-attive e il modello preciso. Solo firmware PrimeX 4.x."
         }
       },
       "reauth_confirm": {
@@ -30,16 +32,20 @@
           "host": "Host",
           "port": "Porta",
           "apikey": "Chiave API",
-          "use_https": "Usa HTTPS"
+          "use_https": "Usa HTTPS",
+          "local_6004_password": "Password LAN della centrale"
         },
         "data_description": {
-          "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\")."
+          "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\").",
+          "local_6004_password": "La password LAN/di programmazione della centrale (default 'pass'). Obbligatoria: letta via protocollo locale (TCP 6004) per le scene multi-attive e il modello preciso. Solo firmware PrimeX 4.x."
         }
       }
     },
     "error": {
       "invalid_auth": "Chiave API non valida.",
       "cannot_connect": "Impossibile connettersi alla centrale.",
+      "local_cannot_connect": "Impossibile raggiungere il protocollo locale della centrale (TCP 6004). Verifica la password LAN e che la centrale sia raggiungibile.",
+      "local_unsupported_firmware": "Il firmware di questa centrale non è un layout PrimeX 4.x supportato.",
       "unknown": "Errore imprevisto."
     },
     "abort": {
@@ -58,15 +64,11 @@
           "scan_interval_active": "Intervallo di polling attivo (secondi)",
           "webhook_enabled": "Abilita push realtime (webhook locale)",
           "label_language": "Lingua dei nomi zona (per le icone)",
-          "group_by_room": "Raggruppa le zone per stanza",
-          "local_6004_enabled": "Abilita protocollo locale (scene multi-attive)",
-          "local_6004_password": "Password LAN della centrale"
+          "group_by_room": "Raggruppa le zone per stanza"
         },
         "data_description": {
           "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant.",
-          "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant.",
-          "local_6004_enabled": "Legge una volta le definizioni degli scenari tramite il protocollo locale di sola lettura (TCP 6004) per esporre sensori di scena multi-attivi accurati che l'API HTTP non può fornire. Sola lettura; in caso di errore usa solo l'HTTP. Supportato su firmware PrimeX 4.x.",
-          "local_6004_password": "La password LAN/di programmazione della centrale (default 'pass'). Memorizzata localmente; usata solo per leggere la configurazione via TCP 6004."
+          "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant."
         }
       }
     }

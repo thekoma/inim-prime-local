@@ -5,8 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from custom_components.inim_prime.client import ArmMode, AreaMode, AreaState, Area
-
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntityFeature,
     AlarmControlPanelState,
@@ -17,6 +15,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.inim_prime.alarm_control_panel import (
     InimAlarmControlPanel,
 )
+from custom_components.inim_prime.client import Area, AreaMode, AreaState, ArmMode
 from custom_components.inim_prime.coordinator import (
     InimData,
     InimDataUpdateCoordinator,
@@ -151,9 +150,7 @@ def test_static_properties(entity_factory) -> None:
 
 def test_extra_state_attributes(entity_factory) -> None:
     """Extra attributes expose area_id, alarm_memory and raw names."""
-    entity = entity_factory(
-        _area(AreaMode.TOTAL, state=AreaState.SABOTAGE, alarm_memory=True)
-    )
+    entity = entity_factory(_area(AreaMode.TOTAL, state=AreaState.SABOTAGE, alarm_memory=True))
     attrs = entity.extra_state_attributes
     assert attrs == {
         "area_id": 1,

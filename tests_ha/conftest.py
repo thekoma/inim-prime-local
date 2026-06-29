@@ -14,25 +14,27 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from pytest_homeassistant_custom_component.common import (  # noqa: E402
+    MockConfigEntry,
+)
+
 from custom_components.inim_prime.client import (  # noqa: E402
     ApiStats,
     Area,
     AreaMode,
     AreaState,
     Fault,
+    Local6004Config,
     Output,
     Scenario,
+    SceneDef,
     Version,
     Zone,
     ZoneState,
 )
-
-from pytest_homeassistant_custom_component.common import (  # noqa: E402
-    MockConfigEntry,
-)
-
 from custom_components.inim_prime.const import (  # noqa: E402
     CONF_APIKEY,
+    CONF_LOCAL_PASSWORD,
     CONF_USE_HTTPS,
     DOMAIN,
 )
@@ -46,12 +48,13 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 @pytest.fixture
 def entry_data() -> dict:
-    """Return valid config-entry data."""
+    """Return valid config-entry data (the 6004 LAN password is mandatory)."""
     return {
         "host": "192.0.2.10",
         "port": 8080,
         CONF_APIKEY: "secret-key",
         CONF_USE_HTTPS: False,
+        CONF_LOCAL_PASSWORD: "pass",
         "scan_interval": 15,
     }
 
@@ -161,8 +164,24 @@ def mock_client(
 
 
 @pytest.fixture
-def patch_client(mock_client: AsyncMock):
-    """Patch the client constructor in both __init__ and config_flow."""
+def mock_local_config() -> Local6004Config:
+    """A valid 6004 config (mandatory channel) used by the test harness.
+
+    Scene 1 targets area 1 (sample_areas area 1 is DISARMED) so it reads active.
+    """
+    return Local6004Config(
+        firmware="4.07 PX020",
+        layout_ok=True,
+        scenes=[SceneDef(id=1, arms={1: "disarm"})],
+        zone_areas={1: [1]},
+    )
+
+
+@pytest.fixture
+def patch_client(mock_client: AsyncMock, mock_local_config: Local6004Config):
+    """Patch the cgi client AND the mandatory 6004 client in __init__/config_flow."""
+    local = AsyncMock()
+    local.async_read_config.return_value = mock_local_config
     with (
         patch(
             "custom_components.inim_prime.InimPrimeClient",
@@ -171,6 +190,14 @@ def patch_client(mock_client: AsyncMock):
         patch(
             "custom_components.inim_prime.config_flow.InimPrimeClient",
             return_value=mock_client,
+        ),
+        patch(
+            "custom_components.inim_prime.Local6004Client",
+            return_value=local,
+        ),
+        patch(
+            "custom_components.inim_prime.config_flow.Local6004Client",
+            return_value=local,
         ),
     ):
         yield mock_client

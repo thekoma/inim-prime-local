@@ -22,7 +22,6 @@ from custom_components.inim_prime import webhook as webhook_mod
 from custom_components.inim_prime.alarm_control_panel import InimAlarmControlPanel
 from custom_components.inim_prime.binary_sensor import (
     InimAreaAlarmMemoryBinarySensor,
-    InimScenarioBinarySensor,
     InimZoneBinarySensor,
 )
 from custom_components.inim_prime.button import InimClearAlarmMemoryButton
@@ -42,6 +41,7 @@ from custom_components.inim_prime.client import (
 )
 from custom_components.inim_prime.const import (
     CONF_APIKEY,
+    CONF_LOCAL_PASSWORD,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
@@ -252,9 +252,6 @@ def test_binary_sensor_none_fallbacks() -> None:
     area_bs = InimAreaAlarmMemoryBinarySensor(coordinator, 99)
     assert area_bs.is_on is None
 
-    scen_bs = InimScenarioBinarySensor(coordinator, 99)
-    assert scen_bs.is_on is None
-
 
 # ---------------------------------------------------------------------------
 # Diagnostics
@@ -373,6 +370,7 @@ def _push_entry() -> MockConfigEntry:
             CONF_PORT: 8080,
             CONF_APIKEY: "k",
             CONF_USE_HTTPS: False,
+            CONF_LOCAL_PASSWORD: "pass",
             "scan_interval": 15,
         },
         options={

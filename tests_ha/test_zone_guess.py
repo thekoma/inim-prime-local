@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
 from custom_components.inim_prime.zone_guess import (
-    SUPPORTED_LANGUAGES,
     _CLASS,
+    SUPPORTED_LANGUAGES,
     _fold,
     guess_device_class,
     normalize_language,

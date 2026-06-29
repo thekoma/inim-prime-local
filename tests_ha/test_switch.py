@@ -13,11 +13,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from custom_components.inim_prime.client import InimApiError, ApiStatus, ZoneState, Fault, Output, Version, Zone
-
 from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.inim_prime.client import (
+    ApiStatus,
+    Fault,
+    InimApiError,
+    Output,
+    Version,
+    Zone,
+    ZoneState,
+)
 from custom_components.inim_prime.coordinator import InimData
 from custom_components.inim_prime.switch import (
     InimOutputSwitch,
@@ -85,7 +92,7 @@ def fake_coordinator(version, outputs, zones):
         local_config=None,
         last_update_success=True,
         async_request_refresh=AsyncMock(),
-        async_add_listener=lambda *a, **k: (lambda: None),
+        async_add_listener=lambda *a, **k: lambda: None,
     )
     return coordinator
 
@@ -146,9 +153,7 @@ async def test_output_turn_on_off(fake_coordinator, entry):
 
 
 async def test_output_code_not_allowed_raises_and_no_refresh(fake_coordinator, entry):
-    fake_coordinator.client.set_output.side_effect = InimApiError(
-        ApiStatus.CODE_NOT_ALLOWED
-    )
+    fake_coordinator.client.set_output.side_effect = InimApiError(ApiStatus.CODE_NOT_ALLOWED)
     sw = InimOutputSwitch(fake_coordinator, entry, 1)
 
     with pytest.raises(HomeAssistantError) as exc_info:
@@ -160,9 +165,7 @@ async def test_output_code_not_allowed_raises_and_no_refresh(fake_coordinator, e
 
 
 async def test_output_other_api_error_raises(fake_coordinator, entry):
-    fake_coordinator.client.set_output.side_effect = InimApiError(
-        ApiStatus.ERROR_EXECUTION
-    )
+    fake_coordinator.client.set_output.side_effect = InimApiError(ApiStatus.ERROR_EXECUTION)
     sw = InimOutputSwitch(fake_coordinator, entry, 1)
 
     with pytest.raises(HomeAssistantError):

@@ -7,13 +7,12 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from custom_components.inim_prime.client import InimApiError, InimConnectionError, ApiStatus
-
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.inim_prime.client import ApiStatus, InimApiError, InimConnectionError
 from custom_components.inim_prime.const import (
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     FAILURES_BEFORE_BACKOFF,

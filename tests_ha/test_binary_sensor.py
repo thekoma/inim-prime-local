@@ -5,17 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from custom_components.inim_prime.client import (
-    AreaMode,
-    AreaState,
-    ZoneState,
-    Area,
-    Fault,
-    Scenario,
-    Version,
-    Zone,
-)
-
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.const import EntityCategory
 
@@ -23,8 +12,17 @@ from custom_components.inim_prime.binary_sensor import (
     InimAreaAlarmMemoryBinarySensor,
     InimFaultBinarySensor,
     InimFaultFlagBinarySensor,
-    InimScenarioBinarySensor,
     InimZoneBinarySensor,
+)
+from custom_components.inim_prime.client import (
+    Area,
+    AreaMode,
+    AreaState,
+    Fault,
+    Scenario,
+    Version,
+    Zone,
+    ZoneState,
 )
 from custom_components.inim_prime.const import CONF_GROUP_BY_ROOM, CONF_LABEL_LANGUAGE
 from custom_components.inim_prime.coordinator import InimData
@@ -56,9 +54,7 @@ def _area(area_id: int, label: str, *, alarm_memory: bool) -> Area:
 def inim_data() -> InimData:
     """Return a sample InimData."""
     return InimData(
-        version=Version(
-            version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=False
-        ),
+        version=Version(version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=False),
         areas=[
             _area(1, "Ground", alarm_memory=True),
             _area(2, "Upstairs", alarm_memory=False),
@@ -102,9 +98,7 @@ def test_label_language_resolution() -> None:
     """The label language follows the override option, else the HA language."""
     hass = SimpleNamespace(config=SimpleNamespace(language="it"))
 
-    auto = SimpleNamespace(
-        hass=hass, config_entry=SimpleNamespace(options={})
-    )
+    auto = SimpleNamespace(hass=hass, config_entry=SimpleNamespace(options={}))
     assert label_language(auto) == "it"  # no option -> HA language
 
     explicit_auto = SimpleNamespace(
@@ -275,53 +269,3 @@ def test_fault_flag_binary_sensor(coordinator: SimpleNamespace) -> None:
         api_stats=None,
     )
     assert sensor.is_on is True
-
-
-def test_scenario_binary_sensor(coordinator: SimpleNamespace) -> None:
-    """A per-scenario sensor tracks Scenario.active; RUNNING, disabled by default.
-
-    Disabled by default because the panel only sets a scenario's ``st`` flag for
-    the system-wide Total macro, not for single-area scenarios (see the
-    InimScenarioBinarySensor docstring); the per-area alarm_control_panel is the
-    authoritative arm state.
-    """
-    active = InimScenarioBinarySensor(coordinator, 0)
-    inactive = InimScenarioBinarySensor(coordinator, 1)
-
-    assert active.device_class is BinarySensorDeviceClass.RUNNING
-    assert active.entity_category is None
-    assert active.entity_registry_enabled_default is False
-    assert active.unique_id == "abc123_scenario_active_0"
-    assert active.name == "Disarm all"
-    assert active.is_on is True
-    assert active.available is True
-    assert inactive.is_on is False
-
-    # A new poll flips the active scenario.
-    coordinator.data = InimData(
-        version=coordinator.data.version,
-        areas=coordinator.data.areas,
-        zones=coordinator.data.zones,
-        scenarios=[
-            Scenario(id=0, label="Disarm all", active=False),
-            Scenario(id=1, label="Arm away", active=True),
-        ],
-        outputs=[],
-        fault=coordinator.data.fault,
-        api_stats=None,
-    )
-    assert active.is_on is False
-    assert inactive.is_on is True
-
-    # When the scenario disappears from the panel, the entity goes unavailable.
-    coordinator.data = InimData(
-        version=coordinator.data.version,
-        areas=coordinator.data.areas,
-        zones=coordinator.data.zones,
-        scenarios=[],
-        outputs=[],
-        fault=coordinator.data.fault,
-        api_stats=None,
-    )
-    assert active.available is False
-    assert active.is_on is None

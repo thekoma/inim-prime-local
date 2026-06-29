@@ -31,12 +31,13 @@ from .client import (
     InimApiError,
     InimConnectionError,
     InimPrimeClient,
+    Local6004Client,
+    Local6004Error,
 )
 from .const import (
     CONF_APIKEY,
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
-    CONF_LOCAL_ENABLED,
     CONF_LOCAL_PASSWORD,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
@@ -44,7 +45,7 @@ from .const import (
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DEFAULT_GROUP_BY_ROOM,
-    DEFAULT_LOCAL_ENABLED,
+    DEFAULT_LOCAL_PASSWORD,
     DEFAULT_NAME,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
@@ -52,6 +53,7 @@ from .const import (
     DEFAULT_USE_HTTPS,
     DOMAIN,
     LABEL_LANGUAGE_AUTO,
+    LOCAL_6004_PORT,
 )
 from .coordinator import InimConfigEntry
 from .zone_guess import SUPPORTED_LANGUAGES
@@ -86,6 +88,22 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
         except Exception:  # noqa: BLE001
             errors["base"] = "unknown"
 
+        # The local 6004 channel is mandatory: validate it too (skip if the cgi
+        # check already failed, to surface the primary error first).
+        if not errors:
+            local = Local6004Client(
+                host=user_input[CONF_HOST],
+                password=user_input.get(CONF_LOCAL_PASSWORD, DEFAULT_LOCAL_PASSWORD),
+                port=LOCAL_6004_PORT,
+            )
+            try:
+                config = await local.async_read_config()
+            except Local6004Error:
+                errors["base"] = "local_cannot_connect"
+            else:
+                if not config.layout_ok:
+                    errors["base"] = "local_unsupported_firmware"
+
         return errors
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -112,6 +130,9 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
                     vol.Required(CONF_APIKEY): str,
                     vol.Required(CONF_USE_HTTPS, default=DEFAULT_USE_HTTPS): bool,
+                    vol.Required(
+                        CONF_LOCAL_PASSWORD, default=DEFAULT_LOCAL_PASSWORD
+                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                 }
             ),
             errors=errors,
@@ -193,6 +214,10 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_USE_HTTPS,
                         default=suggested.get(CONF_USE_HTTPS, DEFAULT_USE_HTTPS),
                     ): bool,
+                    vol.Required(
+                        CONF_LOCAL_PASSWORD,
+                        default=suggested.get(CONF_LOCAL_PASSWORD, DEFAULT_LOCAL_PASSWORD),
+                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                 }
             ),
             errors=errors,
@@ -278,14 +303,6 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                         CONF_GROUP_BY_ROOM,
                         default=options.get(CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM),
                     ): bool,
-                    vol.Required(
-                        CONF_LOCAL_ENABLED,
-                        default=options.get(CONF_LOCAL_ENABLED, DEFAULT_LOCAL_ENABLED),
-                    ): bool,
-                    vol.Optional(
-                        CONF_LOCAL_PASSWORD,
-                        default=options.get(CONF_LOCAL_PASSWORD, ""),
-                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
                 }
             ),
         )

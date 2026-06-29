@@ -1,9 +1,13 @@
-import asyncio
 import json
 
 import pytest
 
-from custom_components.inim_prime.client import InimApiError, InimConnectionError, InimPrimeClient, ApiStatus
+from custom_components.inim_prime.client import (
+    ApiStatus,
+    InimApiError,
+    InimConnectionError,
+    InimPrimeClient,
+)
 
 
 class FakeResponse:
@@ -62,6 +66,7 @@ async def test_nonzero_status_raises(load_fixture):
 
 async def test_get_area_open_zones(load_fixture):
     from custom_components.inim_prime.client import ArmMode
+
     session = FakeSession(load_fixture("partitions_nrz"))
     zones = await _client(session).get_area_open_zones(0, ArmMode.TOTAL)
     assert len(zones) == 1
@@ -128,7 +133,7 @@ class TimeoutSession:
     def get(self, url, params=None, timeout=None):
         class _CM:
             async def __aenter__(self_inner):
-                raise asyncio.TimeoutError
+                raise TimeoutError
 
             async def __aexit__(self_inner, *exc):
                 return False

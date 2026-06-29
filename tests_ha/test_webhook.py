@@ -6,19 +6,19 @@ from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.components import webhook
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.inim_prime.client import (
     AreaMode,
     AreaState,
     Zone,
     ZoneState,
 )
-
-from homeassistant.components import webhook
-from homeassistant.core import HomeAssistant
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
 from custom_components.inim_prime.const import (
     CONF_APIKEY,
+    CONF_LOCAL_PASSWORD,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
@@ -45,6 +45,7 @@ def push_entry() -> MockConfigEntry:
             "port": 8080,
             CONF_APIKEY: "secret-key",
             CONF_USE_HTTPS: False,
+            CONF_LOCAL_PASSWORD: "pass",
             "scan_interval": 15,
         },
         options={
@@ -420,9 +421,7 @@ async def test_webhook_unregistered_after_unload(
     await hass.async_block_till_done()
 
     # After unload the id is free again: re-registering must not raise.
-    webhook.async_register(
-        hass, "test", "probe", WEBHOOK_ID, lambda *a: None
-    )
+    webhook.async_register(hass, "test", "probe", WEBHOOK_ID, lambda *a: None)
     webhook.async_unregister(hass, WEBHOOK_ID)
 
 
@@ -440,9 +439,7 @@ async def test_options_enable_push_generates_webhook(
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(
-        mock_config_entry.entry_id
-    )
+    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -460,6 +457,4 @@ async def test_options_enable_push_generates_webhook(
     # The webhook was registered on reload (OptionsFlowWithReload); the id is
     # taken, so a fresh registration of the same id would raise.
     with pytest.raises(ValueError):
-        webhook.async_register(
-            hass, "probe", "probe", webhook_id, lambda *a: None
-        )
+        webhook.async_register(hass, "probe", "probe", webhook_id, lambda *a: None)

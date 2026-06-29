@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
@@ -11,7 +12,6 @@ from homeassistant.helpers.typing import ConfigType
 from .client import InimPrimeClient, Local6004Client, Local6004Error
 from .const import (
     CONF_APIKEY,
-    CONF_LOCAL_ENABLED,
     CONF_LOCAL_PASSWORD,
     CONF_USE_HTTPS,
     CONF_WEBHOOK_ENABLED,
@@ -58,9 +58,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
     coordinator = InimDataUpdateCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
 
-    # Optional read-only local (TCP 6004) enrichment: read the static scenario
-    # definitions once so we can expose multi-active scene sensors. This must
-    # never break setup — any failure degrades gracefully to cgi-only.
+    # Read-only local (TCP 6004) is MANDATORY: read the static scenario
+    # definitions once (multi-active scenes, zone->area, precise model). A
+    # failure aborts setup — there is no cgi-only fallback by design.
     local_client = await _async_setup_local(hass, entry, coordinator)
 
     entry.runtime_data = InimRuntimeData(
@@ -79,34 +79,35 @@ async def _async_setup_local(
     hass: HomeAssistant,
     entry: InimConfigEntry,
     coordinator: InimDataUpdateCoordinator,
-) -> Local6004Client | None:
-    """Read the static config over TCP 6004 once (read-only), if enabled.
+) -> Local6004Client:
+    """Read the static config over TCP 6004 once (read-only). MANDATORY.
 
-    Returns the client when enrichment is active, else None. Any failure
-    (disabled, unreachable, wrong password, unsupported firmware) is logged and
-    swallowed so the cgi-based integration keeps working unchanged.
+    The LAN password lives in entry.data (fallback: legacy entries that stored it
+    in options). A connection/auth failure raises ConfigEntryNotReady (HA retries);
+    an unsupported (non-4.x) firmware raises ConfigEntryError. There is no
+    cgi-only fallback — the local channel is required.
     """
-    if not (entry.options.get(CONF_LOCAL_ENABLED) and entry.options.get(CONF_LOCAL_PASSWORD)):
-        return None
+    password = entry.data.get(CONF_LOCAL_PASSWORD) or entry.options.get(CONF_LOCAL_PASSWORD)
+    if not password:
+        raise ConfigEntryError(
+            "The panel LAN password is required. Reconfigure the integration to add it."
+        )
     local_client = Local6004Client(
         host=entry.data[CONF_HOST],
-        password=entry.options[CONF_LOCAL_PASSWORD],
+        password=password,
         port=LOCAL_6004_PORT,
     )
     try:
         config = await local_client.async_read_config()
     except Local6004Error as err:
-        LOGGER.warning("Local 6004 read failed, continuing cgi-only: %s", err)
-        return None
+        raise ConfigEntryNotReady(f"Local 6004 channel unreachable: {err}") from err
     if not config.layout_ok:
-        LOGGER.warning(
-            "Local 6004 firmware '%s' is not a supported 4.x layout; skipping scene enrichment",
-            config.firmware,
+        raise ConfigEntryError(
+            f"Panel firmware '{config.firmware}' is not a supported PrimeX 4.x layout."
         )
-        return None
     coordinator.local_config = config
     LOGGER.debug(
-        "Local 6004 enrichment active: %d scene definitions, %d zone->area maps",
+        "Local 6004 active: %d scene definitions, %d zone->area maps",
         len(config.scenes),
         len(config.zone_areas),
     )

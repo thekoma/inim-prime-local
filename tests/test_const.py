@@ -1,4 +1,4 @@
-from custom_components.inim_prime.client import ApiStatus, ZoneState, AreaMode, Command
+from custom_components.inim_prime.client import ApiStatus, AreaMode, Command, ZoneState
 
 
 def test_status_codes_include_not_implemented():

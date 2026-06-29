@@ -1,9 +1,8 @@
 from custom_components.inim_prime.client import (
-    AreaMode,
-    AreaState,
-    ZoneState,
     ApiStats,
     Area,
+    AreaMode,
+    AreaState,
     Fault,
     IpAcl,
     MacAcl,
@@ -12,6 +11,7 @@ from custom_components.inim_prime.client import (
     Timer,
     Version,
     Zone,
+    ZoneState,
     parse_decimal,
 )
 
@@ -172,6 +172,7 @@ def test_mac_acl_drops_empty_slot(load_fixture):
 
 def test_open_zone_from_raw(load_fixture):
     from custom_components.inim_prime.client import OpenZone
+
     zones = [OpenZone.from_raw(z) for z in load_fixture("partitions_nrz")["data"]["nrz"]]
     assert zones[0].id == 0
     assert zones[0].label == "Fin.Bagno PT"

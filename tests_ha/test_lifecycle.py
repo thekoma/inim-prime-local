@@ -88,7 +88,6 @@ async def test_new_area_adds_exactly_one_entity_and_not_again(
 ) -> None:
     """A new area id adds one alarm_control_panel on the next update only."""
     entry, client = await _setup(hass, mock_config_entry, patch_client)
-    registry = er.async_get(hass)
 
     new_uid = f"{entry.entry_id}_area_2"
     assert _count(hass, entry, new_uid) == 0
@@ -210,23 +209,3 @@ async def test_new_scenario_adds_apply_button_without_reload(
     await _refresh(hass, entry)
 
     assert registry.async_get_entity_id("button", "inim_prime", new_uid) is not None
-
-
-async def test_new_scenario_adds_one_binary_sensor(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    patch_client: AsyncMock,
-    sample_scenarios,
-) -> None:
-    """A new scenario adds exactly one per-scenario binary_sensor, once."""
-    entry, client = await _setup(hass, mock_config_entry, patch_client)
-    new_uid = f"{entry.entry_id}_scenario_active_2"
-    assert _count(hass, entry, new_uid) == 0
-
-    client.get_scenarios.return_value = [
-        *sample_scenarios,
-        Scenario(id=2, label="Night", active=False),
-    ]
-    await _refresh(hass, entry)
-    await _refresh(hass, entry)
-    assert _count(hass, entry, new_uid) == 1

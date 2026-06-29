@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
-from custom_components.inim_prime.client import InimApiError, InimConnectionError, ApiStatus
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT, CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.inim_prime.client import (
+    ApiStatus,
+    InimApiError,
+    InimConnectionError,
+    Local6004Config,
+    Local6004Error,
+)
 from custom_components.inim_prime.const import (
     CONF_APIKEY,
+    CONF_LOCAL_PASSWORD,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
@@ -29,25 +34,20 @@ USER_INPUT = {
     CONF_PORT: 8080,
     CONF_APIKEY: "secret-key",
     CONF_USE_HTTPS: False,
+    CONF_LOCAL_PASSWORD: "pass",
 }
 
 
-async def test_user_flow_success(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_user_flow_success(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """A valid config creates an entry."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
 
     # The add-hub form must NOT offer a scan_interval field.
     assert CONF_SCAN_INTERVAL not in result["data_schema"].schema
 
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -59,43 +59,55 @@ async def test_user_flow_success(
     patch_client.version.assert_awaited()
 
 
-async def test_user_flow_invalid_auth(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_user_flow_invalid_auth(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """An invalid API key surfaces invalid_auth and allows recovery."""
     patch_client.version.side_effect = InimApiError(ApiStatus.ERROR_APIKEY)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
 
     # Recover with a working key.
     patch_client.version.side_effect = None
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
-async def test_user_flow_cannot_connect(
+async def test_user_flow_local_cannot_connect(hass: HomeAssistant, patch_client: AsyncMock) -> None:
+    """A failure on the mandatory 6004 channel surfaces local_cannot_connect."""
+    with patch("custom_components.inim_prime.config_flow.Local6004Client") as cls:
+        cls.return_value.async_read_config = AsyncMock(side_effect=Local6004Error("x"))
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "local_cannot_connect"}
+
+
+async def test_user_flow_local_unsupported_firmware(
     hass: HomeAssistant, patch_client: AsyncMock
 ) -> None:
+    """A non-4.x panel firmware surfaces local_unsupported_firmware."""
+    with patch("custom_components.inim_prime.config_flow.Local6004Client") as cls:
+        cls.return_value.async_read_config = AsyncMock(
+            return_value=Local6004Config(firmware="3.10 PRIME", layout_ok=False)
+        )
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "local_unsupported_firmware"}
+
+
+async def test_user_flow_cannot_connect(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """A connection failure surfaces cannot_connect."""
     patch_client.version.side_effect = InimConnectionError("boom")
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
@@ -107,12 +119,8 @@ async def test_user_flow_other_api_error_is_unknown(
     """A non-apikey API error surfaces unknown."""
     patch_client.version.side_effect = InimApiError(ApiStatus.ERROR_COMMAND)
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "unknown"}
@@ -130,9 +138,7 @@ def _add_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
-async def test_reconfigure_success(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_reconfigure_success(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """Reconfigure updates apikey (and host) and reloads the entry."""
     entry = _add_entry(hass)
 
@@ -148,9 +154,7 @@ async def test_reconfigure_success(
         CONF_APIKEY: "rotated-key",
         CONF_USE_HTTPS: True,
     }
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], new_input
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], new_input)
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
@@ -177,27 +181,21 @@ async def test_reconfigure_invalid_auth_then_recovers(
         CONF_APIKEY: "bad-key",
         CONF_USE_HTTPS: False,
     }
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], new_input
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], new_input)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
 
     # Recover with a good key.
     patch_client.version.side_effect = None
     new_input[CONF_APIKEY] = "good-key"
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], new_input
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], new_input)
     await hass.async_block_till_done()
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.data[CONF_APIKEY] == "good-key"
 
 
-async def test_reconfigure_cannot_connect(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_reconfigure_cannot_connect(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """A connection failure during reconfigure surfaces cannot_connect."""
     entry = _add_entry(hass)
     patch_client.version.side_effect = InimConnectionError("boom")
@@ -209,16 +207,12 @@ async def test_reconfigure_cannot_connect(
         CONF_APIKEY: "secret-key",
         CONF_USE_HTTPS: False,
     }
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], new_input
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], new_input)
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_reauth_success(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_reauth_success(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """Reauth re-enters the API key, updates the entry and reloads."""
     entry = _add_entry(hass)
 
@@ -245,9 +239,7 @@ async def test_reauth_success(
     patch_client.version.assert_awaited()
 
 
-async def test_reauth_invalid_auth(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_reauth_invalid_auth(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """A still-invalid key during reauth surfaces invalid_auth, then recovers."""
     entry = _add_entry(hass)
     patch_client.version.side_effect = InimApiError(ApiStatus.ERROR_APIKEY)
@@ -269,9 +261,7 @@ async def test_reauth_invalid_auth(
     assert entry.data[CONF_APIKEY] == "good-key"
 
 
-async def test_reauth_cannot_connect(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_reauth_cannot_connect(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """A connection failure during reauth surfaces cannot_connect."""
     entry = _add_entry(hass)
     patch_client.version.side_effect = InimConnectionError("boom")
@@ -284,9 +274,7 @@ async def test_reauth_cannot_connect(
     assert result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_options_poll_interval_defaults(
-    hass: HomeAssistant, patch_client: AsyncMock
-) -> None:
+async def test_options_poll_interval_defaults(hass: HomeAssistant, patch_client: AsyncMock) -> None:
     """The options form defaults idle to 30 and active to 1 (not 15)."""
     entry = _add_entry(hass)
 
