@@ -1,3 +1,18 @@
+get_event_log:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: inim_prime
+    limit:
+      default: 100
+      selector:
+        number:
+          min: 0
+          max: 4000
+          mode: box
+
 arm_forced:
   fields:
     entity_id:
@@ -7,7 +22,6 @@ arm_forced:
           integration: inim_prime
           domain:
             - alarm_control_panel
-            - select
     scenario:
       example: "Ins.Notte"
       selector:

@@ -28,7 +28,9 @@ major version (see :attr:`Local6004Config.layout_ok`).
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 from dataclasses import dataclass, field
+from typing import Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -43,6 +45,45 @@ _CHUNK = 1024
 # Connection-open context op-codes.
 _OPEN_CFG = b"\x17\x00\x00\x00\x00"  # 0x140xxxxx config region
 _OPEN_VER = b"\x0d\x00\x00\x00\x00"  # version region
+_OPEN_LOG = b"\x1f\x00\x00\x00\x00"  # low-address event-log region
+
+# Event log (40x): ring of 14-byte records at 0xA1D0.
+_LOG_ADDR = 0xA1D0
+_LOG_LEN = 56000
+_LOG_REC = 14
+_EPOCH2000 = dt.datetime(2000, 1, 1)
+
+# Event-code dictionary (record bytes B0,B1 -> human label), built by correlating
+# a live 6004 log with the panel's own CSV export. Unknown codes render raw.
+_EVENT_CODES: dict[str, str] = {
+    "0422": "Failed call",
+    "0522": "Failed call",
+    "fc22": "Call queue full",
+    "6e1f": "Valid key",
+    "6d1f": "Valid key",
+    "891c": "Reset partition",
+    "8a1c": "Reset partition",
+    "8b1c": "Reset partition",
+    "8c1c": "Reset partition",
+    "2f1c": "Partition armed (away)",
+    "301c": "Partition armed (away)",
+    "311c": "Partition armed (away)",
+    "321c": "Partition armed (away)",
+    "6b1c": "Disarm partition",
+    "6c1c": "Disarm partition",
+    "6d1c": "Disarm partition",
+    "6e1c": "Disarm partition",
+    "210c": "Bypass zone",
+    "0f10": "Bypass zone",
+    "1e10": "Bypass zone",
+    "5b22": "Scenario",
+    "5c22": "Scenario",
+    "5d22": "Scenario",
+    "5e22": "Scenario",
+    "5f22": "Scenario",
+    "6022": "Scenario",
+    "6222": "Scenario",
+}
 
 # 40x (PrimeX 4.x) EEPROM offsets (base 0x14000000). Firmware-version-specific.
 _VERSION_ADDR = 0x1A002400
@@ -167,6 +208,43 @@ def scene_is_active(arms: dict[int, str], areas_by_id: dict[int, AreaMode]) -> b
     return True
 
 
+def decode_event_log(
+    blob: bytes,
+    area_labels: dict[int, str] | None = None,
+    scenario_labels: dict[int, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Decode the panel event-log ring (14-byte records) into a time-sorted list.
+
+    Record: ``[ts u32 LE, epoch 2000-01-01 = panel local time][b4 partition
+    bitmask][b5..7][B0 subtype][B1 class][B2 source][B3 flags: 0x80=set /
+    clear=restoral][..]``. Empty/invalid slots (ts outside 2025-2027) are skipped.
+    ``area_labels`` / ``scenario_labels`` map ids -> names for enrichment.
+    """
+    area_labels = area_labels or {}
+    scenario_labels = scenario_labels or {}
+    out: list[dict[str, Any]] = []
+    for off in range(0, len(blob) - _LOG_REC + 1, _LOG_REC):
+        r = blob[off : off + _LOG_REC]
+        ts = int.from_bytes(r[0:4], "little")
+        if not (0x30000000 < ts < 0x40000000):
+            continue
+        b0, b1, b3 = r[8], r[9], r[11]
+        partitions = [
+            area_labels.get(p, f"area{p + 1}") for p in range(8) if r[4] & (1 << p)
+        ]
+        entry: dict[str, Any] = {
+            "time": (_EPOCH2000 + dt.timedelta(seconds=ts)).strftime("%Y-%m-%d %H:%M:%S"),
+            "event": _EVENT_CODES.get(f"{b0:02x}{b1:02x}", f"code:{b0:02x}{b1:02x}"),
+            "partitions": partitions,
+            "restoral": not (b3 & 0x80),
+        }
+        if b1 == 0x22 and b0 >= 0x5B and (b0 - 0x5B) in scenario_labels:
+            entry["scenario"] = scenario_labels[b0 - 0x5B]
+        out.append(entry)
+    out.sort(key=lambda e: e["time"])
+    return out
+
+
 class Local6004Error(Exception):
     """Any failure talking the local 6004 protocol (connect/read/decrypt)."""
 
@@ -186,6 +264,22 @@ class Local6004Client:
             return await asyncio.wait_for(self._read_config(), self._timeout)
         except (TimeoutError, OSError, ValueError) as err:
             raise Local6004Error(str(err)) from err
+
+    async def async_read_event_log(
+        self,
+        area_labels: dict[int, str] | None = None,
+        scenario_labels: dict[int, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read and decode the panel event log (read-only), time-sorted."""
+        try:
+            blob = (
+                await asyncio.wait_for(
+                    self._session(_OPEN_LOG, [(_LOG_ADDR, _LOG_LEN)]), self._timeout
+                )
+            )[0]
+        except (TimeoutError, OSError, ValueError) as err:
+            raise Local6004Error(str(err)) from err
+        return decode_event_log(blob, area_labels, scenario_labels)
 
     async def _read_config(self) -> Local6004Config:
         # version first (its own context) -> gate on the 40x layout

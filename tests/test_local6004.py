@@ -221,3 +221,61 @@ async def test_session_swallows_wait_closed_error(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(m.asyncio, "open_connection", fake_open)
     cfg = await m.Local6004Client("host", "pass").async_read_config()
     assert cfg.firmware == "3.0 X"  # completed despite the teardown error
+
+
+# --------------------------------------------------------------- event log
+def _log_record(ts: int, partmask: int, b0: int, b1: int, b3: int) -> bytes:
+    """Build a 14-byte event-log record."""
+    r = bytearray(14)
+    r[0:4] = ts.to_bytes(4, "little")
+    r[4] = partmask
+    r[8] = b0
+    r[9] = b1
+    r[11] = b3
+    return bytes(r)
+
+
+def test_decode_event_log() -> None:
+    blob = (
+        _log_record(0x31000000, 0x01, 0x6E, 0x1F, 0x80)  # Valid key, part0, set
+        + _log_record(0x31000010, 0x00, 0x5E, 0x22, 0x00)  # Scenario idx 3, restoral
+        + _log_record(0x31000020, 0x04, 0xAA, 0xBB, 0x80)  # unknown code, part2
+        + _log_record(0, 0, 0, 0, 0)  # empty slot -> skipped
+    )
+    events = m.decode_event_log(blob, {0: "Home"}, {3: "Dis.Box"})
+    assert len(events) == 3  # the empty slot is dropped
+    assert events[0]["event"] == "Valid key"
+    assert events[0]["partitions"] == ["Home"]
+    assert events[0]["restoral"] is False  # 0x80 = set
+    assert "scenario" not in events[0]
+    assert events[1]["event"] == "Scenario"
+    assert events[1]["scenario"] == "Dis.Box"
+    assert events[1]["restoral"] is True  # flag clear
+    # unknown code renders raw; unlabeled partition falls back to areaN
+    assert events[2]["event"] == "code:aabb"
+    assert events[2]["partitions"] == ["area3"]
+
+
+async def test_async_read_event_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    blob = _log_record(0x31000000, 0x01, 0x6E, 0x1F, 0x80)
+    client = m.Local6004Client("host", "pass")
+
+    async def fake_session(open_payload, reads):  # noqa: ANN001, ANN202
+        assert open_payload == m._OPEN_LOG
+        assert reads == [(m._LOG_ADDR, m._LOG_LEN)]
+        return [blob]
+
+    monkeypatch.setattr(client, "_session", fake_session)
+    events = await client.async_read_event_log({0: "Home"})
+    assert events[0]["event"] == "Valid key"
+
+
+async def test_async_read_event_log_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = m.Local6004Client("host", "pass")
+
+    async def boom(open_payload, reads):  # noqa: ANN001, ANN202
+        raise OSError("down")
+
+    monkeypatch.setattr(client, "_session", boom)
+    with pytest.raises(m.Local6004Error):
+        await client.async_read_event_log()

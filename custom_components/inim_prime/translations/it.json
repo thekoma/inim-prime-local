@@ -165,10 +165,16 @@
       "message": "Scenario {scenario} sconosciuto."
     },
     "forced_arm_area_or_scenario": {
-      "message": "Indica un'area (con modalità) o il selettore scenari (con uno scenario)."
+      "message": "Indica un'area (con una modalità) oppure il nome di uno scenario."
     },
     "forced_arm_unbypassable_zones": {
       "message": "Impossibile inserire forzato: queste zone non sono escludibili e restano aperte: {zones}."
+    },
+    "event_log_bad_target": {
+      "message": "L'entità {entity_id} non appartiene a INIM Prime."
+    },
+    "event_log_single_target": {
+      "message": "Leggi registro eventi accetta esattamente un'entità target."
     }
   },
   "selector": {
@@ -198,13 +204,27 @@
     }
   },
   "services": {
+    "get_event_log": {
+      "name": "Leggi registro eventi",
+      "description": "Legge il registro eventi memorizzato nella centrale tramite il protocollo locale (sola lettura) e lo restituisce.",
+      "fields": {
+        "entity_id": {
+          "name": "Target",
+          "description": "Una qualsiasi entità INIM Prime — identifica la centrale da leggere."
+        },
+        "limit": {
+          "name": "Limite",
+          "description": "Restituisce solo gli ultimi N eventi (0 = tutti)."
+        }
+      }
+    },
     "arm_forced": {
       "name": "Inserimento forzato",
       "description": "Inserisce un'area o applica uno scenario anche con zone aperte, escludendo prima le zone aperte.",
       "fields": {
         "entity_id": {
           "name": "Target",
-          "description": "Un'area INIM Prime (pannello allarme) o il selettore scenari — individua la centrale."
+          "description": "Un'area INIM Prime (alarm control panel) — identifica la centrale."
         },
         "scenario": {
           "name": "Scenario",

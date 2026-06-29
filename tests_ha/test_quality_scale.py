@@ -72,6 +72,8 @@ _EXPECTED_EXCEPTION_KEYS = {
     "forced_arm_unknown_scenario",
     "forced_arm_area_or_scenario",
     "forced_arm_unbypassable_zones",
+    "event_log_bad_target",
+    "event_log_single_target",
 }
 
 

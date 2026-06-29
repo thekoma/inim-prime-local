@@ -20,6 +20,7 @@ from .local6004 import (
     Local6004Config,
     Local6004Error,
     SceneDef,
+    decode_event_log,
     decode_scene,
     scene_is_active,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "Local6004Config",
     "Local6004Error",
     "SceneDef",
+    "decode_event_log",
     "decode_scene",
     "scene_is_active",
 ]
