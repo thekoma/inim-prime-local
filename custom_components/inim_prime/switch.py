@@ -15,6 +15,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import ApiStatus, InimApiError, InimConnectionError, Output, Zone
@@ -46,6 +47,10 @@ async def async_setup_entry(
     applies to dynamically-added output switches too.
     """
     coordinator = entry.runtime_data.coordinator
+
+    # A single per-panel preference switch (not backed by panel data).
+    async_add_entities([InimForceArmSwitch(coordinator)])
+
     known: set[str] = set()
 
     @callback
@@ -229,3 +234,45 @@ class InimZoneBypassSwitch(
         """Un-bypass (include) the zone."""
         await self._async_set_excluded(False)
         await self.coordinator.async_request_refresh()
+
+
+class InimForceArmSwitch(RestoreEntity, SwitchEntity):
+    """Preference switch: force-arm (bypass open zones) for the scenario buttons.
+
+    A local, persisted toggle (not a panel write). When on, pressing an
+    apply-scenario button bypasses the open zones instead of failing. The state
+    is mirrored onto the coordinator so the buttons can read it, and restored
+    across restarts via RestoreEntity.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "force_arm_on_open"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: InimDataUpdateCoordinator) -> None:
+        """Initialize the force-arm preference switch."""
+        self.coordinator = coordinator
+        entry = coordinator.config_entry
+        self._attr_unique_id = f"{entry.entry_id}_force_arm_on_open"
+        self._attr_device_info = panel_device_info(coordinator)
+        self._attr_is_on = coordinator.force_arm_on_open
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last on/off state and mirror it onto the coordinator."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None:
+            self._attr_is_on = last.state == "on"
+        self.coordinator.force_arm_on_open = bool(self._attr_is_on)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable force arming on open zones."""
+        self._attr_is_on = True
+        self.coordinator.force_arm_on_open = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable force arming on open zones."""
+        self._attr_is_on = False
+        self.coordinator.force_arm_on_open = False
+        self.async_write_ha_state()

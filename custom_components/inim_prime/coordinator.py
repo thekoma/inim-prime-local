@@ -108,6 +108,9 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         # (multi-active scene definitions + zone->area). None when 6004 is
         # disabled, unreachable, or the firmware layout is unsupported.
         self.local_config: Local6004Config | None = None
+        # User preference (the "force arm on open zones" switch): when True the
+        # apply-scenario buttons bypass open zones instead of failing.
+        self.force_arm_on_open = False
 
         # Adaptive interval configuration. The legacy ``scan_interval`` option
         # still acts as the idle baseline when the new options are absent, so

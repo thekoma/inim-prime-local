@@ -13,6 +13,7 @@ from .client import ApiStatus, Area, InimApiError, InimConnectionError, Scenario
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
+from .forced_arm import async_force_arm
 
 # Clearing alarm memory issues a panel write; the cgi is single-threaded, so
 # serialize commands to one in flight at a time.
@@ -160,7 +161,21 @@ class InimApplyScenarioButton(
         return self._last_label
 
     async def async_press(self) -> None:
-        """Activate this scenario on the panel."""
+        """Activate this scenario on the panel.
+
+        When the "force arm on open zones" switch is on, bypass the open zones
+        first (fail-closed) instead of failing; otherwise apply directly.
+        """
+        if self.coordinator.force_arm_on_open:
+            # async_force_arm handles bypass/rollback/refresh and raises a
+            # HomeAssistantError (e.g. unbypassable zones) on failure.
+            await async_force_arm(
+                self.hass,
+                self.coordinator.config_entry,
+                kind="scenario",
+                obj_id=self._scenario_id,
+            )
+            return
         try:
             await self.coordinator.client.apply_scenario(self._scenario_id)
         except InimApiError as err:

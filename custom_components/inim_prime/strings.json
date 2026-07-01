@@ -137,6 +137,11 @@
       "comm_internet": {
         "name": "Communication fault"
       }
+    },
+    "switch": {
+      "force_arm_on_open": {
+        "name": "Force arm on open zones"
+      }
     }
   },
   "exceptions": {

@@ -90,6 +90,7 @@ def fake_coordinator(version, outputs, zones):
         config_entry=SimpleNamespace(entry_id="abc123", title="INIM Prime", options={}),
         hass=SimpleNamespace(config=SimpleNamespace(language="en")),
         local_config=None,
+        force_arm_on_open=False,
         last_update_success=True,
         async_request_refresh=AsyncMock(),
         async_add_listener=lambda *a, **k: lambda: None,
@@ -208,3 +209,50 @@ async def test_async_setup_entry_creates_all_entities(fake_coordinator, entry):
 
     assert sum(isinstance(e, InimOutputSwitch) for e in added) == 2
     assert sum(isinstance(e, InimZoneBypassSwitch) for e in added) == 2
+
+
+# --------------------------------------------------------------- force-arm switch
+async def _find_force_switch(hass, entry):
+    from homeassistant.helpers import entity_registry as er
+
+    reg = er.async_get(hass)
+    for e in er.async_entries_for_config_entry(reg, entry.entry_id):
+        if e.unique_id.endswith("_force_arm_on_open"):
+            return e.entity_id
+    return None
+
+
+async def test_force_arm_switch_toggle(hass, mock_config_entry, patch_client) -> None:
+    """The preference switch defaults off and mirrors onto the coordinator."""
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = mock_config_entry.runtime_data.coordinator
+
+    eid = await _find_force_switch(hass, mock_config_entry)
+    assert eid is not None
+    assert hass.states.get(eid).state == "off"
+    assert coordinator.force_arm_on_open is False
+
+    await hass.services.async_call("switch", "turn_on", {"entity_id": eid}, blocking=True)
+    assert hass.states.get(eid).state == "on"
+    assert coordinator.force_arm_on_open is True
+
+    await hass.services.async_call("switch", "turn_off", {"entity_id": eid}, blocking=True)
+    assert hass.states.get(eid).state == "off"
+    assert coordinator.force_arm_on_open is False
+
+
+async def test_force_arm_switch_restores_on(hass, mock_config_entry, patch_client) -> None:
+    """A restored 'on' state is applied and mirrored onto the coordinator."""
+    from homeassistant.core import State
+    from pytest_homeassistant_custom_component.common import mock_restore_cache
+
+    mock_restore_cache(hass, [State("switch.inim_prime_force_arm_on_open_zones", "on")])
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    eid = await _find_force_switch(hass, mock_config_entry)
+    assert hass.states.get(eid).state == "on"
+    assert mock_config_entry.runtime_data.coordinator.force_arm_on_open is True

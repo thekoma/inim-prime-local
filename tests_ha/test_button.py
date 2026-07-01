@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.const import EntityCategory
@@ -36,6 +36,7 @@ def _make_coordinator(
     coordinator.client = AsyncMock()
     coordinator.async_request_refresh = AsyncMock()
     coordinator.local_config = None
+    coordinator.force_arm_on_open = False
     coordinator.config_entry = MagicMock(entry_id="abc123", title="INIM Prime")
     coordinator.data = InimData(
         version=sample_version,
@@ -183,6 +184,22 @@ async def test_apply_scenario_press_applies_then_refreshes(sample_version, two_a
 
     coordinator.client.apply_scenario.assert_awaited_once_with(2)
     coordinator.async_request_refresh.assert_awaited_once()
+
+
+async def test_apply_scenario_force_arm_path(sample_version, two_areas) -> None:
+    """With the force-arm switch on, the button routes through async_force_arm."""
+    coordinator = _make_coordinator(sample_version, two_areas, _scenarios())
+    coordinator.force_arm_on_open = True
+    coordinator.hass = MagicMock()
+    button = InimApplyScenarioButton(coordinator, _scenarios()[1])
+
+    with patch("custom_components.inim_prime.button.async_force_arm", new=AsyncMock()) as force:
+        await button.async_press()
+
+    force.assert_awaited_once()
+    assert force.await_args.kwargs == {"kind": "scenario", "obj_id": 2}
+    # the plain apply path is NOT used when forcing
+    coordinator.client.apply_scenario.assert_not_awaited()
 
 
 async def test_apply_scenario_zones_not_ready(sample_version, two_areas) -> None:

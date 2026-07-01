@@ -193,13 +193,23 @@ def _raise_command_error(err: Exception) -> None:
     ) from err
 
 
-async def _handle_arm_forced(call: ServiceCall) -> ServiceResponse:
-    """Handle the inim_prime.arm_forced action."""
-    hass = call.hass
-    entry, kind, obj_id, mode = _resolve_target(hass, call)
-    coordinator = entry.runtime_data.coordinator
-    allow_partial: bool = call.data[ATTR_ALLOW_PARTIAL]
+async def async_force_arm(
+    hass: HomeAssistant,
+    entry: InimConfigEntry,
+    *,
+    kind: str,
+    obj_id: int,
+    mode: ArmMode | None = None,
+    allow_partial: bool = False,
+) -> dict[str, Any]:
+    """Bypass the open zones, then arm the area / apply the scenario.
 
+    Shared by the ``arm_forced`` action and the apply-scenario buttons (when the
+    "force arm on open zones" switch is on). Fail-closed by default: if a zone
+    cannot be bypassed and ``allow_partial`` is False, nothing is armed and it
+    raises. Always fires ``inim_prime_forced_arm``.
+    """
+    coordinator = entry.runtime_data.coordinator
     bypassed: list[OpenZone] = []
     unbypassable: list[OpenZone] = []
     open_zones = await _open_zones(coordinator, kind, obj_id, mode)
@@ -233,6 +243,20 @@ async def _handle_arm_forced(call: ServiceCall) -> ServiceResponse:
     hass.bus.async_fire(EVENT_FORCED_ARM, {"entry_id": entry.entry_id, **result})
     await coordinator.async_request_refresh()
     return result
+
+
+async def _handle_arm_forced(call: ServiceCall) -> ServiceResponse:
+    """Handle the inim_prime.arm_forced action."""
+    hass = call.hass
+    entry, kind, obj_id, mode = _resolve_target(hass, call)
+    return await async_force_arm(
+        hass,
+        entry,
+        kind=kind,
+        obj_id=obj_id,
+        mode=mode,
+        allow_partial=call.data[ATTR_ALLOW_PARTIAL],
+    )
 
 
 def async_register_services(hass: HomeAssistant) -> None:

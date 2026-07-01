@@ -63,6 +63,11 @@
       "comm_internet": {
         "default": "mdi:lan-disconnect"
       }
+    },
+    "switch": {
+      "force_arm_on_open": {
+        "default": "mdi:shield-alert-outline"
+      }
     }
   },
   "services": {

@@ -137,6 +137,11 @@
       "comm_internet": {
         "name": "Guasto comunicazione"
       }
+    },
+    "switch": {
+      "force_arm_on_open": {
+        "name": "Inserimento forzato con zone aperte"
+      }
     }
   },
   "exceptions": {
