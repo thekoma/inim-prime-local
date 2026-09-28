@@ -305,8 +305,10 @@ def test_decode_partition_statuses() -> None:
     data[9:12] = b"\x00\x01\x10"  # area 3: armed away
     data[12:15] = b"\x00\x09\x10"  # area 4: unknown mode -> skipped
     data[15:18] = b"\x01\x04\x11"  # area 5: disarmed with memory -> no active alarm
+    data[18:21] = b"\x00\x01\x11"  # area 6: armed, retained memory only -> no alarm
     out = m.decode_partition_statuses(header + bytes(data))
-    assert set(out) == {0, 2, 3, 5}
+    assert set(out) == {0, 2, 3, 5, 6}
+    assert out[6] == m.NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=True)
     assert out[0] == m.NativeAreaStatus(mode=AreaMode.DISARMED, alarm=False, alarm_memory=False)
     assert out[2] == m.NativeAreaStatus(mode=AreaMode.TOTAL, alarm=True, alarm_memory=True)
     assert out[3] == m.NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=False)
@@ -362,4 +364,33 @@ async def test_area_statuses_timeout_and_close_error(monkeypatch: pytest.MonkeyP
     client = m.Local6004Client("host", "pass")
     with pytest.raises(m.Local6004Error, match="TimeoutError"):
         await client.async_get_area_statuses(timeout=0.05)
+    assert client._status_conn is None
+
+
+def test_decode_partition_statuses_rejects_short_response() -> None:
+    with pytest.raises(ValueError, match="short"):
+        m.decode_partition_statuses(bytes(m._STATUS_HEADER + 10))
+
+
+async def test_area_statuses_short_response_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sessions(monkeypatch, [[_resp(bytes(m._STATUS_HEADER))]])
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.Local6004Error, match="short"):
+        await client.async_get_area_statuses()
+    assert client._status_conn is None
+
+
+async def test_close_does_not_hang_on_stalled_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _StalledWriter(_FakeWriter):
+        async def wait_closed(self) -> None:
+            await asyncio.sleep(10)
+
+    async def fake_open(host: str, port: int):  # noqa: ANN202
+        return _FakeReader(_status_resp({})), _StalledWriter()
+
+    monkeypatch.setattr(m.asyncio, "open_connection", fake_open)
+    monkeypatch.setattr(m, "_CLOSE_TIMEOUT", 0.05)
+    client = m.Local6004Client("host", "pass")
+    await client.async_get_area_statuses()
+    await asyncio.wait_for(client.async_close(), 1)  # bounded, lock released
     assert client._status_conn is None

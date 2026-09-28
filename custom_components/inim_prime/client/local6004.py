@@ -63,6 +63,7 @@ _STATUS_HEADER = 18
 _PARTITION_REC = 3
 _PARTITION_COUNT = 30
 _PARTITION_CONFIGURED = 0x10
+_CLOSE_TIMEOUT = 1.0
 
 # Event log (40x): ring of 14-byte records at 0xA1D0.
 _LOG_ADDR = 0xA1D0
@@ -193,11 +194,19 @@ def decode_partition_statuses(resp: bytes) -> dict[int, NativeAreaStatus]:
     """Decode a partition-status response into ``{area_id: status}``.
 
     Unconfigured partitions (configured bit clear) and records with an unknown
-    mode byte are skipped.
+    mode byte are skipped. A response shorter than the documented header plus
+    all records raises ``ValueError`` rather than yielding partial data.
+
+    ``alarm`` comes from the active alarm flag (record byte 0) only; the
+    retained memory bit (byte 2) never makes an area read as alarming by
+    itself. Memory is set whenever either bit is set.
     """
-    data = resp[_STATUS_HEADER : _STATUS_HEADER + _PARTITION_REC * _PARTITION_COUNT]
+    size = _PARTITION_REC * _PARTITION_COUNT
+    if len(resp) < _STATUS_HEADER + size:
+        raise ValueError(f"short partition-status response ({len(resp)} bytes)")
+    data = resp[_STATUS_HEADER : _STATUS_HEADER + size]
     out: dict[int, NativeAreaStatus] = {}
-    for area_id in range(len(data) // _PARTITION_REC):
+    for area_id in range(_PARTITION_COUNT):
         flags, mode_byte, status = data[area_id * _PARTITION_REC : (area_id + 1) * _PARTITION_REC]
         if not status & _PARTITION_CONFIGURED:
             continue
@@ -205,11 +214,11 @@ def decode_partition_statuses(resp: bytes) -> dict[int, NativeAreaStatus]:
             mode = AreaMode(mode_byte)
         except ValueError:
             continue
-        memory = bool(flags & 0x01 or status & 0x01)
+        active = bool(flags & 0x01)
         out[area_id] = NativeAreaStatus(
             mode=mode,
-            alarm=memory and mode is not AreaMode.DISARMED,
-            alarm_memory=memory,
+            alarm=active and mode is not AreaMode.DISARMED,
+            alarm_memory=active or bool(status & 0x01),
         )
     return out
 
@@ -346,9 +355,10 @@ class Local6004Client:
         _, writer = self._status_conn
         self._status_conn = None
         writer.close()
+        # Bounded: a stalled socket must not keep holding the status lock.
         try:
-            await writer.wait_closed()
-        except OSError:
+            await asyncio.wait_for(writer.wait_closed(), _CLOSE_TIMEOUT)
+        except (OSError, TimeoutError):
             pass
 
     async def async_read_config(self) -> Local6004Config:

@@ -192,3 +192,18 @@ async def test_setup_native_poll_disabled(
     assert mock_config_entry.runtime_data.coordinator.native_client is None
     assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
     mock_local_client.async_close.assert_not_awaited()
+
+
+async def test_native_memory_only_does_not_raise_alarm(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """Retained alarm memory on an armed area does not make it ALARM."""
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, None)
+    patched = coordinator.apply_native_statuses(
+        {1: NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=True)}
+    )
+    assert patched is not None
+    assert patched.areas[0].state is AreaState.READY
+    assert patched.areas[0].alarm_memory
