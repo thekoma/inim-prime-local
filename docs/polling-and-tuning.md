@@ -33,10 +33,16 @@ No. Polling is fully async (the event loop is free during network waits), payloa
 - **Diagnostic reads are throttled** — the API-stats read (`get_status_api`) is refreshed every 10 minutes instead of every cycle.
 
 ## When the panel is slow
-Not every panel matches the numbers above. One PrimeX in the field answered even `ping` in ~0.4 s (spikes to ~3 s), so a full cycle took ~7 s. If you see *"panel did not respond"* errors:
+The numbers above are for **back-to-back** requests. The panel appears to cache its state: requests in quick succession are answered fast, but after an idle pause it re-reads its channels and the first few requests become slow. Measured on the same PrimeX:
+
+| Pattern | Per-request latency |
+|---|---|
+| Back-to-back requests | ~0.25–0.5 s |
+| First ~3 requests after a 20 s pause | ~2.5–3 s each |
+
+So a poll cycle that starts after the idle interval pays the re-read cost and can take **~7 s**. This is expected, not a network fault (ICMP to the panel stays at a few ms). The transient-failure tolerance above absorbs the occasional cycle that is even slower. If you still see *"panel did not respond"* errors:
 - keep the idle interval at the 30 s default (or higher) so the panel is not saturated;
-- consider push ([realtime.md](realtime.md)) so arm/disarm events do not depend on polling;
-- check the panel's network link (cable, switch port, LAN module) — high ICMP latency to the panel points there.
+- use push ([realtime.md](realtime.md)) so arm/disarm events do not depend on polling at all.
 
 ## Recommended profiles
 | Goal | Idle | Active | Push |
