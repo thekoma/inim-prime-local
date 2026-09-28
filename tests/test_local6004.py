@@ -60,6 +60,13 @@ def test_read_cmd_byte_exact() -> None:
     assert cmd[-1] == sum(cmd[:-1]) & 0xFF
 
 
+def test_read_cmd_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-read memory opcode is refused even if the constants were changed."""
+    monkeypatch.setattr(m, "_READ_CONT", 0x12)
+    with pytest.raises(m.ReadOnlyViolation):
+        m._read_cmd(0x10, 4, cont=True)
+
+
 def test_read_cmd_opcodes() -> None:
     assert m._read_cmd(0x10, 4, cont=False)[18] == m._READ_START
     assert m._read_cmd(0x10, 4, cont=True)[18] == m._READ_CONT
@@ -138,7 +145,6 @@ class _FakeWriter:
 def _patch_sessions(monkeypatch: pytest.MonkeyPatch, sessions: list[list[bytes]]) -> list:
     """Make asyncio.open_connection serve one pre-scripted fake stream per call."""
     pairs = [(_FakeReader(b"".join(frames)), _FakeWriter()) for frames in sessions]
-    monkeypatch.setattr(m, "STRUCTURE_TIMEOUT", 5)
     it = iter(pairs)
 
     async def fake_open(host: str, port: int):  # noqa: ANN202
@@ -162,12 +168,20 @@ def _label(text: str) -> bytes:
     return text.encode("latin-1").ljust(m._LABEL_REC, b" ")
 
 
-def _structure_sessions(terminals: dict[int, int]) -> list[bytes]:
-    """Script the status-command session: partitions 0 and 2 configured, then
-    every terminal chunk (unlisted terminals are disabled)."""
+def _term(kind: int, a: bytes = b"\x00\x00\x00\x00", b: bytes = b"\x00\x00\x00\x00") -> bytes:
+    return bytes([kind, 0]) + a + b
+
+
+def _partition_frames() -> list[bytes]:
+    """Script the partition scan: partitions 0 and 2 configured."""
     part = bytearray(m._PARTITION_REC * m._PARTITION_COUNT)
     part[2] = part[8] = m._PARTITION_CONFIGURED
-    frames = [_resp(bytes(m._STATUS_HEADER) + bytes(part))]
+    return [_resp(bytes(m._STATUS_HEADER) + bytes(part))]
+
+
+def _terminal_frames(terminals: dict[int, int]) -> list[bytes]:
+    """Script the terminal scan (unlisted terminals are disabled)."""
+    frames = []
     for start in range(0, m._TERMINAL_COUNT, m._TERMINAL_CHUNK):
         end = min(start + m._TERMINAL_CHUNK, m._TERMINAL_COUNT)
         records = [_term(terminals.get(t, 4)) for t in range(start, end)]
@@ -175,8 +189,11 @@ def _structure_sessions(terminals: dict[int, int]) -> list[bytes]:
     return frames
 
 
-def _config_frames(zones: dict[int, tuple[str, int]], spans: list[tuple[int, int]]) -> list[bytes]:
-    """Script the structure session: ack, labels, zone spans."""
+def _label_frames(
+    zones: dict[int, tuple[str, int]],
+    spans: list[tuple[int, int]],
+) -> list[bytes]:
+    """Script the label session: ack, labels, then labels + settings per span."""
     areas = b"".join(
         _label(n) for n in ["Home", "AREA       002", "Garage"] + ["AREA"] * 27
     )
@@ -185,8 +202,7 @@ def _config_frames(zones: dict[int, tuple[str, int]], spans: list[tuple[int, int
         + [_label(f"SCENARIO   {i + 1:03d}") for i in range(4, m._SCENARIO_COUNT)]
     )
     outputs = b"".join(_label(n) for n in ("Siren", "Buzzer", "Box", "AUX 1", "AUX 2"))
-    frames = [_resp(b"\x00\x00\x00\x00"), _resp(areas), _resp(scenarios)]
-    frames.append(_resp(outputs))
+    frames = [_resp(b"\x00\x00\x00\x00"), _resp(areas), _resp(scenarios), _resp(outputs)]
     for first, last in spans:
         labels = bytearray()
         settings = bytearray()
@@ -198,39 +214,65 @@ def _config_frames(zones: dict[int, tuple[str, int]], spans: list[tuple[int, int
     return frames
 
 
+_ACK = _resp(b"\x00\x00\x00\x00")
+# t0 double, t1 single, t2 single but in no partition, t3 unknown type,
+# t5 double; outputs 1005 and 1007 (1006 disabled).
+_TERMINALS = {0: 3, 1: 0, 2: 0, 3: 2, 5: 3, 1005: 1, 1007: 1}
+_ZONES = {
+    0: ("Door", 0x01),
+    1: ("Window", 0x06),
+    2: ("Unused", 0),
+    5: ("Hall", 1 << 29),
+    1005: ("Door B", 0x01),
+    1010: ("Hall B", 0x04),
+}
+_SPANS = [(0, 5), (1005, 1010)]
+
+
+def _config_sessions() -> list[list[bytes]]:
+    return [[_ACK, _version_frame("4.07 PX020")], [_ACK, _modi_frame()]]
+
+
 async def test_async_read_config_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    ack = _resp(b"\x00\x00\x00\x00")
-    # t0 double, t1 single, t2 single but in no partition, t3 unknown type,
-    # t5 double; outputs 1005 and 1007 (1006 disabled).
-    terminals = {0: 3, 1: 0, 2: 0, 3: 2, 5: 3, 1005: 1, 1007: 1}
-    zones = {
-        0: ("Door", 0x01),
-        1: ("Window", 0x06),
-        2: ("Unused", 0),
-        5: ("Hall", 1 << 29),
-        1005: ("Door B", 0x01),
-        1010: ("Hall B", 0x04),
-    }
     pairs = _patch_sessions(
         monkeypatch,
         [
-            [ack, _version_frame("4.07 PX020")],
-            [ack, _modi_frame()],
-            _structure_sessions(terminals),
-            _config_frames(zones, [(0, 5), (1005, 1010)]),
+            *_config_sessions(),
+            _partition_frames(),
+            _terminal_frames(_TERMINALS),
+            _label_frames(_ZONES, _SPANS),
         ],
     )
     cfg = await m.Local6004Client("host", "pass").async_read_config()
-    # The structure scan sends only read-only status commands, with no context
-    # op: a partition status, then every terminal chunk.
-    sent = [_decrypt(frame) for frame in pairs[2][1].sent]
-    assert sent[0] == m._status_cmd(6)
-    assert all(body[:4] == b"\x07\x00\x00\x00" for body in sent[1:])
-    assert len(sent) == 1 + 51
-    # The label session opens with the config context, then only reads.
-    labels = [_decrypt(frame) for frame in pairs[3][1].sent]
-    assert labels[0] == m._OPEN_CFG
-    assert {body[18] for body in labels[1:]} <= {m._READ_START, m._READ_CONT}
+
+    # Byte-exact frames: the scans send only read-only status commands with no
+    # context op, flagged as command frames; the label session opens with the
+    # config context and then only reads.
+    part_sent, term_sent, label_sent = (pairs[i][1].sent for i in (2, 3, 4))
+    assert part_sent == [m._build_frame(b"\x06\x00\x00\x00" + m._NO_PIN, _KEY, _IV, first=True)]
+    chunks = [(s, min(s + 20, 1010)) for s in range(0, 1010, 20)]
+    assert term_sent == [
+        m._build_frame(
+            b"\x07\x00\x00\x00" + m._NO_PIN + s.to_bytes(2, "little") + e.to_bytes(2, "little"),
+            _KEY,
+            _IV,
+            first=True,
+        )
+        for s, e in chunks
+    ]
+    reads = [
+        (0x14030D20, 480),
+        (0x1403D8E0, 800),
+        (0x1403DEB0, 80),
+        (0x14030F00, 6 * 16),
+        (0x14073414, 6 * 11),
+        (0x14030F00 + 1005 * 16, 6 * 16),
+        (0x14073414 + 1005 * 11, 6 * 11),
+    ]
+    assert [(_decrypt(f), f[4:6]) for f in label_sent] == [(m._OPEN_CFG, b"\x01\x00")] + [
+        (m._read_cmd(addr, n, cont=False), b"\x00\x00") for addr, n in reads
+    ]
+
     assert cfg.layout_ok
     assert cfg.firmware == "4.07 PX020"
     assert [s.id for s in cfg.scenes] == [0]
@@ -259,13 +301,15 @@ async def test_async_read_config_without_zones(monkeypatch: pytest.MonkeyPatch) 
         async def wait_closed(self) -> None:
             raise OSError("already closed")
 
-    ack = _resp(b"\x00\x00\x00\x00")
     streams = iter(
         [
-            (_FakeReader(ack + _version_frame("4.07 PX020")), _FakeWriter()),
-            (_FakeReader(ack + _modi_frame()), _FakeWriter()),
-            (_FakeReader(b"".join(_structure_sessions({}))), _RaisingWriter()),
-            (_FakeReader(b"".join(_config_frames({}, []))), _FakeWriter()),
+            (_FakeReader(b"".join(frames)), _FakeWriter())
+            for frames in _config_sessions()
+        ]
+        + [
+            (_FakeReader(b"".join(_partition_frames())), _RaisingWriter()),
+            (_FakeReader(b"".join(_terminal_frames({}))), _FakeWriter()),
+            (_FakeReader(b"".join(_label_frames({}, []))), _FakeWriter()),
         ]
     )
 
@@ -276,25 +320,68 @@ async def test_async_read_config_without_zones(monkeypatch: pytest.MonkeyPatch) 
     cfg = await m.Local6004Client("host", "pass").async_read_config()
     assert cfg.structure is not None
     assert cfg.structure.zones == []
+    assert cfg.structure.outputs == []
     assert cfg.zone_areas == {}
 
 
-@pytest.mark.parametrize("stream", ["short", "truncated"])
-async def test_structure_failure_keeps_the_config(
-    monkeypatch: pytest.MonkeyPatch, stream: str
+def test_short_zone_settings_drop_the_zone() -> None:
+    """Settings too short for a zone read as an empty mask: the zone is not in use.
+
+    ``_read`` keeps reading until the requested length arrives, so this only
+    guards the decoder against a truncated blob.
+    """
+    labels = b"Door".ljust(16, b"\x00") + b"Window".ljust(16, b"\x00")
+    settings = (1).to_bytes(4, "little") + bytes(7)  # zone 1's record missing
+    zones = m._decode_zones([0, 1], [(0, 1)], [labels, settings])
+    assert zones == [m.NativeZoneDef(0, "Door", 0, (0,))]
+
+
+_SHORT = _resp(bytes(m._STATUS_HEADER))
+
+
+@pytest.mark.parametrize(
+    ("sessions", "missing"),
+    [
+        # partition scan rejected -> areas unknown, the rest is native
+        ([[_SHORT], _terminal_frames(_TERMINALS), _label_frames(_ZONES, _SPANS)], {"areas"}),
+        # a terminal chunk short -> zones and outputs unknown (no zone spans read)
+        (
+            [_partition_frames(), [*_terminal_frames(_TERMINALS)[:3], _SHORT], _label_frames({}, [])],
+            {"zones", "outputs"},
+        ),
+        # connection dropped mid-scan
+        ([_partition_frames(), [b""], _label_frames({}, [])], {"zones", "outputs"}),
+        # the label session fails -> nothing is known
+        (
+            [_partition_frames(), _terminal_frames(_TERMINALS), [_ACK]],
+            {"areas", "zones", "scenarios", "outputs"},
+        ),
+    ],
+)
+async def test_structure_step_failure_only_drops_its_kinds(
+    monkeypatch: pytest.MonkeyPatch, sessions: list[list[bytes]], missing: set[str]
 ) -> None:
-    """A failed structure read leaves structure None; the config still loads."""
-    ack = _resp(b"\x00\x00\x00\x00")
-    status = _resp(bytes(m._STATUS_HEADER)) if stream == "short" else b""
-    _patch_sessions(
-        monkeypatch,
-        [[ack, _version_frame("4.07 PX020")], [ack, _modi_frame()], [status]],
-    )
+    """Each structure step is best effort: the config still loads."""
+    _patch_sessions(monkeypatch, [*_config_sessions(), *sessions])
     cfg = await m.Local6004Client("host", "pass").async_read_config()
     assert cfg.layout_ok
     assert [s.id for s in cfg.scenes] == [0]
-    assert cfg.structure is None
-    assert cfg.zone_areas == {}
+    st = cfg.structure
+    assert st is not None
+    kinds = {"areas", "zones", "scenarios", "outputs"}
+    assert {k for k in kinds if getattr(st, k) is None} == missing
+
+
+async def test_structure_step_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A structure step that hangs is cut off by its own budget."""
+    client = m.Local6004Client("host", "pass")
+    monkeypatch.setattr(m, "STRUCTURE_TIMEOUT", 0.01)
+
+    async def hang() -> int:
+        await asyncio.sleep(5)
+        return 1
+
+    assert await client._best_effort(hang()) is None
 
 
 async def test_async_read_config_truncated_stream(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -451,7 +538,7 @@ def _status_resp(records: dict[int, bytes]) -> bytes:
 
 def test_status_cmd_bytes_and_guard() -> None:
     assert m._status_cmd(6) == b"\x06\x00\x00\x00\x74\x00\x00\x00\x00\x00"
-    with pytest.raises(AssertionError):
+    with pytest.raises(m.ReadOnlyViolation):
         m._status_cmd(3)  # SET_ARMING_STATUS must never be built
 
 
@@ -556,9 +643,6 @@ async def test_close_does_not_hang_on_stalled_socket(monkeypatch: pytest.MonkeyP
 
 
 # --------------------------------------------------------------- terminal status
-def _term(kind: int, a: bytes = b"\x00\x00\x00\x00", b: bytes = b"\x00\x00\x00\x00") -> bytes:
-    return bytes([kind, 0]) + a + b
-
 
 def _terminal_resp(records: list[bytes]) -> bytes:
     data = b"".join(records).ljust(m._TERMINAL_REC * m._TERMINAL_CHUNK, b"\x00")
@@ -579,7 +663,7 @@ def test_terminal_chunks() -> None:
 
 def test_terminal_status_cmd_guard() -> None:
     assert m._status_cmd(7, b"\x00\x00\x14\x00")[-4:] == b"\x00\x00\x14\x00"
-    with pytest.raises(AssertionError):
+    with pytest.raises(m.ReadOnlyViolation):
         m._status_cmd(9)  # SET_ZONE_BYPASS must never be built
 
 

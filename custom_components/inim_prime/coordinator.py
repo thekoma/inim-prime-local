@@ -30,6 +30,8 @@ from .client import (
     Local6004Error,
     Local6004Structure,
     NativeAreaStatus,
+    NativeObject,
+    NativeZoneDef,
     NativeZoneStatus,
     Output,
     Scenario,
@@ -314,20 +316,20 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         native labels and object sets, in the native order:
 
         * an object both report keeps its cgi state, with the native label;
-        * an area or zone only the native structure lists is added when the
-          native poll is enabled (it keeps that state live), starting from the
-          last native status reading or a neutral state (disarmed/ready,
-          closed) until the first tick. With the poll off nothing would ever
-          update it, so it is left out;
         * an area, zone or scenario only the cgi reports is kept as the cgi
-          has it: a security object is never hidden on the strength of the
-          native existence rules alone. Both cases are logged once per kind;
+          has it (the union): a security object is never hidden on the
+          strength of the native existence rules alone;
+        * an area or zone only the native structure lists is added only while
+          the native poll is enabled, since that poll is what keeps its state
+          live. It starts from the last native status reading, or a neutral
+          state (disarmed/ready, closed) until the first tick;
+        * a scenario only the native structure lists is added as inactive;
         * outputs come from the native structure only, which fixes the cgi's
           output list (two outputs, named after zones). An output the cgi does
           not report has an unknown state.
 
-        Without a native structure (not read) the cgi snapshot is returned
-        unchanged.
+        A kind the native read could not provide (None), or no native
+        structure at all, keeps the cgi's list unchanged.
         """
         structure = self.local_config.structure if self.local_config is not None else None
         if structure is None:
@@ -336,69 +338,94 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         native_poll = bool(
             self.config_entry.options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL)
         )
+        return replace(
+            data,
+            areas=self._merge_areas(data.areas, structure.areas, native_poll),
+            zones=self._merge_zones(data.zones, structure.zones, native_poll),
+            scenarios=self._merge_scenarios(data.scenarios, structure.scenarios),
+            outputs=self._merge_outputs(data.outputs, structure.outputs),
+        )
 
-        cgi_areas = {area.id: area for area in data.areas}
+    def _merge_areas(
+        self, cgi: list[Area], native: list[NativeObject] | None, native_poll: bool
+    ) -> list[Area]:
+        if native is None:
+            return cgi
+        by_id = {area.id: area for area in cgi}
         areas: list[Area] = []
-        for obj in structure.areas:
-            area = cgi_areas.pop(obj.id, None)
+        for obj in native:
+            area = by_id.pop(obj.id, None)
             if area is not None:
                 areas.append(replace(area, label=obj.label))
             elif native_poll:
-                native = self._native_areas.get(obj.id)
+                status = self._native_areas.get(obj.id)
                 areas.append(
                     Area(
                         id=obj.id,
                         label=obj.label,
-                        mode=native.mode if native is not None else AreaMode.DISARMED,
+                        mode=status.mode if status is not None else AreaMode.DISARMED,
                         state=(
                             AreaState.ALARM
-                            if native is not None and native.alarm
+                            if status is not None and status.alarm
                             else AreaState.READY
                         ),
-                        alarm_memory=native is not None and native.alarm_memory,
+                        alarm_memory=status is not None and status.alarm_memory,
                     )
                 )
-        areas.extend(cgi_areas.values())
+        return areas + list(by_id.values())
 
-        cgi_zones = {zone.id: zone for zone in data.zones}
+    def _merge_zones(
+        self, cgi: list[Zone], native: list[NativeZoneDef] | None, native_poll: bool
+    ) -> list[Zone]:
+        if native is None:
+            return cgi
+        by_id = {zone.id: zone for zone in cgi}
         zones: list[Zone] = []
-        for zdef in structure.zones:
-            zone = cgi_zones.pop(zdef.id, None)
+        for zdef in native:
+            zone = by_id.pop(zdef.id, None)
             if zone is not None:
                 zones.append(replace(zone, label=zdef.label))
             elif native_poll:
-                live = self._native_zones.get(zdef.id)
+                status = self._native_zones.get(zdef.id)
                 zones.append(
                     Zone(
                         id=zdef.id,
                         label=zdef.label,
                         # The cgi reports a zone's own id as its terminal.
                         terminal=zdef.id,
-                        state=live.state if live is not None else ZoneState.READY,
-                        alarm_memory=live is not None and live.alarm_memory,
-                        excluded=live is not None and live.excluded,
+                        state=status.state if status is not None else ZoneState.READY,
+                        alarm_memory=status is not None and status.alarm_memory,
+                        excluded=status is not None and status.excluded,
                     )
                 )
-        zones.extend(cgi_zones.values())
+        return zones + list(by_id.values())
 
-        cgi_scenarios = {scenario.id: scenario for scenario in data.scenarios}
+    @staticmethod
+    def _merge_scenarios(
+        cgi: list[Scenario], native: list[NativeObject] | None
+    ) -> list[Scenario]:
+        if native is None:
+            return cgi
+        by_id = {scenario.id: scenario for scenario in cgi}
         scenarios = [
-            replace(cgi_scenarios.pop(obj.id), label=obj.label)
-            if obj.id in cgi_scenarios
+            replace(by_id.pop(obj.id), label=obj.label)
+            if obj.id in by_id
             else Scenario(id=obj.id, label=obj.label, active=False)
-            for obj in structure.scenarios
+            for obj in native
         ]
-        scenarios.extend(cgi_scenarios.values())
+        return scenarios + list(by_id.values())
 
-        cgi_outputs = {output.id: output for output in data.outputs}
-        outputs = [
-            replace(cgi_outputs[obj.id], label=obj.label)
-            if obj.id in cgi_outputs
+    @staticmethod
+    def _merge_outputs(cgi: list[Output], native: list[NativeObject] | None) -> list[Output]:
+        if native is None:
+            return cgi
+        by_id = {output.id: output for output in cgi}
+        return [
+            replace(by_id[obj.id], label=obj.label)
+            if obj.id in by_id
             else Output(id=obj.id, label=obj.label, terminal=obj.id, state=None, type=0)
-            for obj in structure.outputs
+            for obj in native
         ]
-
-        return replace(data, areas=areas, zones=zones, scenarios=scenarios, outputs=outputs)
 
     def _warn_structure_mismatch(self, data: InimData, structure: Local6004Structure) -> None:
         """Log once per kind when the cgi and native object sets differ.
@@ -407,16 +434,16 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         existence rules miss a case and is worth a bug report. Outputs are not
         compared: the cgi output list is known to be wrong.
         """
+
+        def ids(items: list[NativeObject] | list[NativeZoneDef] | None) -> set[int] | None:
+            return None if items is None else {item.id for item in items}
+
         for kind, cgi_ids, native_ids in (
-            ("areas", {a.id for a in data.areas}, {a.id for a in structure.areas}),
-            ("zones", {z.id for z in data.zones}, {z.id for z in structure.zones}),
-            (
-                "scenarios",
-                {s.id for s in data.scenarios},
-                {s.id for s in structure.scenarios},
-            ),
+            ("areas", {a.id for a in data.areas}, ids(structure.areas)),
+            ("zones", {z.id for z in data.zones}, ids(structure.zones)),
+            ("scenarios", {s.id for s in data.scenarios}, ids(structure.scenarios)),
         ):
-            if cgi_ids == native_ids or kind in self._structure_warned:
+            if native_ids is None or cgi_ids == native_ids or kind in self._structure_warned:
                 continue
             self._structure_warned.add(kind)
             LOGGER.warning(

@@ -25,6 +25,9 @@ from custom_components.inim_prime.client import (  # noqa: E402
     AreaState,
     Fault,
     Local6004Config,
+    Local6004Structure,
+    NativeObject,
+    NativeZoneDef,
     Output,
     Scenario,
     SceneDef,
@@ -168,12 +171,20 @@ def mock_local_config() -> Local6004Config:
     """A valid 6004 config (mandatory channel) used by the test harness.
 
     Scene 1 targets area 1 (sample_areas area 1 is DISARMED) so it reads active.
+    The native structure matches the sample cgi objects, as it does on a real
+    panel, so setup runs the native-structure path by default.
     """
     return Local6004Config(
         firmware="4.07 PX020",
         layout_ok=True,
         scenes=[SceneDef(id=1, arms={1: "disarm"})],
         zone_areas={1: [1]},
+        structure=Local6004Structure(
+            areas=[NativeObject(1, "Home")],
+            zones=[NativeZoneDef(1, "Front Door", 1, (1,))],
+            scenarios=[NativeObject(1, "Away")],
+            outputs=[NativeObject(1, "Siren")],
+        ),
     )
 
 

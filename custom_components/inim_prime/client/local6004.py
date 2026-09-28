@@ -22,7 +22,8 @@ read-only *status* commands (op 6 partition statuses, op 7 terminal
 statuses). It never builds a
 write/program frame (a write is the same framing with a write opcode — on a
 production panel a stray write could brick it). ``_read_cmd`` and
-``_status_cmd`` assert their opcodes.
+``_status_cmd`` check their opcodes and raise :class:`ReadOnlyViolation`
+(an explicit check, not an ``assert``, so ``python -O`` cannot drop it).
 
 Live partition status (op 6) follows the command layout documented by
 Pitscheider's inim-prime-native (https://github.com/Pitscheider/inim-prime-native,
@@ -56,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import re
+from collections.abc import Awaitable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -67,6 +69,8 @@ PORT = 6004
 _PREAMBLE = b"\x50\x50"
 _READ_START = 0x11
 _READ_CONT = 0x10
+# The only memory opcodes ever sent (literal, independent of the names above).
+_READ_OPS = frozenset({0x10, 0x11})
 _CHUNK = 1024
 
 # Connection-open context op-codes.
@@ -100,9 +104,12 @@ _OUTPUT_TERMINALS = range(SECOND_HALF_ZONE_OFFSET, _TERMINAL_COUNT)
 # Per-command ceiling for the live status reads. Cold reads after the channel
 # sat idle were measured at 3.4-4 s, so 3 s timed out on a healthy panel.
 STATUS_TIMEOUT = 5.0
-# Ceiling for the one-off structure read at setup: three connections and ~60
-# round trips, each of which can be slow on a cold channel.
+# Ceiling for each step of the one-off structure read at setup (its own budget,
+# outside the config read's): a step can take ~50 round trips, each of which
+# can be slow on a cold channel.
 STRUCTURE_TIMEOUT = 30.0
+# Failures of a best-effort structure step: that object kind is then unknown.
+_STEP_ERRORS = (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError)
 
 _STATUS_OPS = frozenset({_OP_PARTITION_STATUS, _OP_TERMINAL_STATUS})
 
@@ -211,9 +218,14 @@ def _build_frame(app: bytes, key: bytes, iv: bytes, *, first: bool) -> bytes:
     return bytes(frame)
 
 
+class ReadOnlyViolation(RuntimeError):
+    """A frame other than a read or a read-only status command was about to be built."""
+
+
 def _read_cmd(addr: int, length: int, *, cont: bool) -> bytes:
     op = _READ_CONT if cont else _READ_START
-    assert op in (_READ_START, _READ_CONT), "READ-ONLY guard"
+    if op not in _READ_OPS:
+        raise ReadOnlyViolation(f"opcode {op:#x}")
     body = bytearray()
     body += addr.to_bytes(4, "little")
     body += b"\x00\x00\x00\x00"
@@ -227,7 +239,8 @@ def _read_cmd(addr: int, length: int, *, cont: bool) -> bytes:
 
 def _status_cmd(op: int, data: bytes = b"") -> bytes:
     """Build a read-only status command body (no PIN)."""
-    assert op in _STATUS_OPS, "READ-ONLY guard"
+    if op not in _STATUS_OPS:
+        raise ReadOnlyViolation(f"status opcode {op}")
     return op.to_bytes(4, "little") + _NO_PIN + data
 
 
@@ -492,13 +505,15 @@ class Local6004Structure:
       by terminal id, which is also the id the cgi uses.
 
     On a live PrimeX 4.07 this reproduces the cgi's area, zone and scenario
-    sets and labels exactly.
+    sets and labels exactly. A kind is None when its read failed (e.g. a
+    panel variant rejecting part of the terminal scan): the cgi's list is then
+    used for that kind.
     """
 
-    areas: list[NativeObject] = field(default_factory=list)
-    zones: list[NativeZoneDef] = field(default_factory=list)
-    scenarios: list[NativeObject] = field(default_factory=list)
-    outputs: list[NativeObject] = field(default_factory=list)
+    areas: list[NativeObject] | None = None
+    zones: list[NativeZoneDef] | None = None
+    scenarios: list[NativeObject] | None = None
+    outputs: list[NativeObject] | None = None
 
 
 @dataclass(frozen=True)
@@ -643,23 +658,21 @@ class Local6004Client:
         """Connect, read the static config (read-only), and disconnect.
 
         The firmware and scenario definitions are required: a failure raises
-        :class:`Local6004Error`. The structure is best effort: its read covers
-        the whole terminal range, verified on one firmware only, so a failure
-        leaves ``structure`` None and the caller keeps the cgi structure.
+        :class:`Local6004Error`. The structure is best effort, per object kind
+        and outside that budget: it covers the whole terminal range, verified
+        on one firmware only, so a failed step leaves its kinds None and the
+        caller keeps the cgi's list for them.
         """
         try:
             config = await asyncio.wait_for(self._read_config(), self._timeout)
-        except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as err:
+        except _STEP_ERRORS as err:
             raise Local6004Error(str(err) or type(err).__name__) from err
         if not config.layout_ok:
             return config
-        try:
-            structure = await asyncio.wait_for(self._read_structure(), STRUCTURE_TIMEOUT)
-        except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError):
-            return config
+        structure = await self._read_structure()
         return replace(
             config,
-            zone_areas={z.id: list(z.areas) for z in structure.zones},
+            zone_areas={z.id: list(z.areas) for z in structure.zones or []},
             structure=structure,
         )
 
@@ -699,9 +712,16 @@ class Local6004Client:
         return Local6004Config(firmware=firmware, layout_ok=True, scenes=scenes)
 
     async def _read_structure(self) -> Local6004Structure:
-        """Read which objects exist and their labels (see :class:`Local6004Structure`)."""
-        area_ids, terminal_types = await self._scan_terminals()
-        candidates = zone_candidates(terminal_types)
+        """Read which objects exist and their labels (see :class:`Local6004Structure`).
+
+        Three best-effort steps, each on its own connection and budget: the
+        partition scan (areas), the terminal scan (zones and outputs), then
+        the labels and zone settings (everything). A failed step only drops
+        the kinds that depend on it.
+        """
+        area_ids = await self._best_effort(self._scan_partitions())
+        terminal_types = await self._best_effort(self._scan_terminals())
+        candidates = zone_candidates(terminal_types) if terminal_types is not None else []
         spans = _half_spans(candidates)
         reads = [
             (_AREA_LABELS_ADDR, _LABEL_REC * _PARTITION_COUNT),
@@ -712,44 +732,71 @@ class Local6004Client:
             count = last - first + 1
             reads.append((_ZONE_LABELS_ADDR + first * _LABEL_REC, count * _LABEL_REC))
             reads.append((_ZONE_CFG_ADDR + first * _ZONE_CFG_REC, count * _ZONE_CFG_REC))
-        area_labels, scenario_labels, output_labels, *zone_blobs = await self._session(
-            _OPEN_CFG, reads
-        )
+        blobs = await self._best_effort(self._session(_OPEN_CFG, reads))
+        if blobs is None:
+            return Local6004Structure()
+        area_labels, scenario_labels, output_labels, *zone_blobs = blobs
 
         scenarios = [
             NativeObject(id=sid, label=_label_at(scenario_labels, sid))
             for sid in range(_SCENARIO_COUNT)
         ]
         return Local6004Structure(
-            areas=[NativeObject(id=a, label=_label_at(area_labels, a)) for a in area_ids],
-            zones=_decode_zones(candidates, spans, zone_blobs),
+            areas=(
+                None
+                if area_ids is None
+                else [NativeObject(id=a, label=_label_at(area_labels, a)) for a in area_ids]
+            ),
+            zones=(
+                None if terminal_types is None else _decode_zones(candidates, spans, zone_blobs)
+            ),
             scenarios=[s for s in scenarios if not is_factory_default_scenario(s.id, s.label)],
-            outputs=[
-                NativeObject(id=t, label=_label_at(output_labels, t - _OUTPUT_TERMINALS.start))
-                for t in _OUTPUT_TERMINALS
-                if terminal_types.get(t) == _TERMINAL_OUTPUT
-            ],
+            outputs=(
+                None
+                if terminal_types is None
+                else [
+                    NativeObject(
+                        id=t, label=_label_at(output_labels, t - _OUTPUT_TERMINALS.start)
+                    )
+                    for t in _OUTPUT_TERMINALS
+                    if terminal_types.get(t) == _TERMINAL_OUTPUT
+                ]
+            ),
         )
 
-    async def _scan_terminals(self) -> tuple[list[int], dict[int, int]]:
-        """Return the configured partitions and every terminal's type.
+    @staticmethod
+    async def _best_effort[T](step: Awaitable[T]) -> T | None:
+        """Run one structure step under its own budget; None if it fails."""
+        try:
+            return await asyncio.wait_for(step, STRUCTURE_TIMEOUT)
+        except _STEP_ERRORS:
+            return None
 
-        Uses the read-only status commands on their own connection (they take
-        no context op): one partition status, then all terminals in chunks.
+    async def _scan_partitions(self) -> list[int]:
+        """Return the configured partitions (read-only status command, no context op)."""
+        (resp,) = await self._command_session([(_OP_PARTITION_STATUS, b"")])
+        return decode_configured_partitions(resp)
+
+    async def _scan_terminals(self) -> dict[int, int]:
+        """Return every terminal's type (read-only status commands, no context op).
+
+        Any failed or short chunk fails the whole scan: a partial zone list
+        would be worse than falling back to the cgi's.
         """
         chunks = [
             (start, min(start + _TERMINAL_CHUNK, _TERMINAL_COUNT))
             for start in range(0, _TERMINAL_COUNT, _TERMINAL_CHUNK)
         ]
-        commands = [(_OP_PARTITION_STATUS, b"")] + [
-            (_OP_TERMINAL_STATUS, s.to_bytes(2, "little") + e.to_bytes(2, "little"))
-            for s, e in chunks
-        ]
-        partition_resp, *terminal_resps = await self._command_session(commands)
+        resps = await self._command_session(
+            [
+                (_OP_TERMINAL_STATUS, s.to_bytes(2, "little") + e.to_bytes(2, "little"))
+                for s, e in chunks
+            ]
+        )
         terminal_types: dict[int, int] = {}
-        for (start, end), resp in zip(chunks, terminal_resps, strict=True):
+        for (start, end), resp in zip(chunks, resps, strict=True):
             terminal_types |= decode_terminal_types(resp, start, end)
-        return decode_configured_partitions(partition_resp), terminal_types
+        return terminal_types
 
     async def _command_session(self, commands: list[tuple[int, bytes]]) -> list[bytes]:
         """Open one connection, send ``(op, data)`` status commands, return responses.

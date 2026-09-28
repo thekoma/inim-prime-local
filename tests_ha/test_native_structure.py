@@ -141,7 +141,9 @@ async def test_mismatch_keeps_cgi_only_objects_and_warns_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """cgi-only areas/zones/scenarios are kept, cgi-only outputs dropped; one warning per kind."""
-    structure = Local6004Structure(areas=[NativeObject(2, "Garage")])
+    structure = Local6004Structure(
+        areas=[NativeObject(2, "Garage")], zones=[], scenarios=[], outputs=[]
+    )
     coordinator = await _coordinator(hass, mock_config_entry, mock_client, structure)
 
     with caplog.at_level(logging.WARNING):
@@ -176,6 +178,32 @@ async def test_native_only_objects_need_the_native_poll(
     # scenarios and outputs carry no live state the poll would provide
     assert [s.id for s in data.scenarios] == [1, 3]
     assert [o.id for o in data.outputs] == [1, 1005]
+
+
+async def test_unknown_kind_keeps_the_cgi_list(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A kind the native read could not provide (None) is the cgi's, unwarned."""
+    structure = Local6004Structure(areas=[NativeObject(1, "Casa")])
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, structure)
+
+    with caplog.at_level(logging.WARNING):
+        data = await coordinator._async_update_data()
+
+    assert [a.label for a in data.areas] == ["Casa"]
+    assert [z.label for z in data.zones] == ["Front Door"]
+    assert [s.label for s in data.scenarios] == ["Away"]
+    assert [o.label for o in data.outputs] == ["Siren"]
+
+    coordinator.local_config = _config(Local6004Structure(outputs=[NativeObject(1, "Sirena")]))
+    with caplog.at_level(logging.WARNING):
+        data = await coordinator._async_update_data()
+    assert [a.label for a in data.areas] == ["Home"]
+    assert [o.label for o in data.outputs] == ["Sirena"]
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 async def test_matching_structure_does_not_warn(

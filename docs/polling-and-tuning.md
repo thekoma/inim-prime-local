@@ -78,7 +78,7 @@ Every cgi cycle still reads everything; the native structure is then applied, wh
 - any difference between the cgi and native sets is logged as a warning once per kind (please report it);
 - outputs come from the native structure only: the cgi output list is known to be wrong. An output the cgi does not report has an unknown on/off state.
 
-If the structure read fails (for example on a panel variant that answers the terminal scan differently), setup continues with the cgi object list and names and logs a warning.
+The structure read is best effort, in three steps with their own time budget (outside the setup read's): the partition scan (areas), the terminal scan (zones and outputs) and the label read (everything). If a step fails, for example on a panel variant that rejects part of the terminal scan, only the kinds that depend on it fall back to the cgi's list and names, and a warning is logged. Setup never fails or retries because of it.
 
 Entity unique IDs are unchanged, so existing entities keep their history. The structure is not re-read while running: reload the integration after adding, removing or renaming objects on the panel.
 

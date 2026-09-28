@@ -10,12 +10,19 @@ These drive the *real* integration end-to-end through ``hass`` (full
 * the declutter gating still applies to a *dynamically-added* factory-default
   area and to a dynamically-added output switch;
 * no duplicate entities appear after several coordinator updates.
+
+The object lists here are driven by the cgi, so these tests run without a
+native structure (the fallback path when it cannot be read). With one, the
+native structure fixes existence and labels at setup; see
+test_native_structure.py.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
+import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -24,11 +31,18 @@ from custom_components.inim_prime.client import (
     Area,
     AreaMode,
     AreaState,
+    Local6004Config,
     Output,
     Scenario,
     Zone,
     ZoneState,
 )
+
+
+@pytest.fixture
+def mock_local_config(mock_local_config: Local6004Config) -> Local6004Config:
+    """Drop the native structure so the cgi lists drive the entity set."""
+    return replace(mock_local_config, structure=None)
 
 
 def _area(area_id: int, label: str) -> Area:

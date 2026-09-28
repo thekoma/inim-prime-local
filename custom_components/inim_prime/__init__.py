@@ -133,21 +133,22 @@ async def _async_setup_local(
         )
     coordinator.local_config = config
     structure = config.structure
-    if structure is None:
+    missing = [
+        kind
+        for kind in ("areas", "zones", "scenarios", "outputs")
+        if structure is None or getattr(structure, kind) is None
+    ]
+    if missing:
         LOGGER.warning(
-            "Could not read the panel structure over the native channel;"
-            " using the cgi object list and names"
+            "Could not read the panel %s over the native channel; using the cgi object"
+            " list and names for them",
+            ", ".join(missing),
         )
-    else:
-        LOGGER.debug(
-            "Local 6004 active: %d scene definitions, %d areas, %d zones, %d scenarios,"
-            " %d outputs",
-            len(config.scenes),
-            len(structure.areas),
-            len(structure.zones),
-            len(structure.scenarios),
-            len(structure.outputs),
-        )
+    LOGGER.debug(
+        "Local 6004 active: %d scene definitions, native structure %s",
+        len(config.scenes),
+        structure,
+    )
     return local_client
 
 
