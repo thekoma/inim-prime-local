@@ -81,6 +81,7 @@ Open **Configure** on the integration to tune how it reads the panel.
 | **Zone label language** | Auto | Language used to guess each zone's icon (and room) from its name (window/door/garage/motion/smoke/…). *Auto* follows Home Assistant's language; 12 languages are supported. |
 | **Group zones by room** | on | Place each zone under a per-room device (Camera, Bagno, Garage…) guessed from its name, so you can assign whole rooms to HA areas. |
 | **Fast area and zone polling (native protocol)** | on | Read every area's arm/disarm state and every zone's state (open/closed, excluded, alarm memory) every 2 s over the panel's native TCP 6004 protocol (read-only, ~15–50 ms per cycle), so changes show up within ~2 s without push. While it is healthy the cgi poll relaxes to every **5 min** (it is then only needed for outputs, faults and diagnostics) and returns to the idle interval if the native channel fails. |
+| **Native commands (arm/disarm, bypass, outputs) — experimental** | off | Send arm/disarm, scenarios, zone bypass, outputs and alarm-memory reset over the native TCP 6004 protocol instead of the cgi. **Not yet verified on a live panel**: test it first as described in [docs/native-commands.md](docs/native-commands.md), and turn it off to go back to the cgi. A command is retried on the cgi only when it certainly never reached the panel. |
 
 ### How fast can it go? (measured on a real PrimeX 4.07)
 
@@ -159,6 +160,7 @@ SmartLiving / Nexus panels use a different protocol and are **not** covered here
 - [Configuration](docs/configuration.md) — enable the API on the panel, add & reconfigure the integration
 - [Polling & tuning](docs/polling-and-tuning.md) — adaptive polling, measured limits, safety guards
 - [Realtime](docs/realtime.md) — local webhook event-push and the SIA-IP alternative
+- [Native commands](docs/native-commands.md) — the experimental native write path, its safety rules and how to test it
 - [Examples & use cases](docs/examples.md) — automations and dashboards
 - [Known limitations](docs/known-limitations.md)
 - [Reporting issues](docs/reporting-issues.md)
@@ -190,7 +192,7 @@ This project is local-first and specific to INIM **Prime / PrimeX** over the on-
 
 - **[pla10/homeassistant_inim_alarm](https://github.com/pla10/homeassistant_inim_alarm)** — the most established INIM integration. Cloud-based (INIM Cloud) with WebSocket push and an optional local SIA-IP listener; covers SmartLiving and Prime. Choose it for broad panel coverage if a cloud dependency is acceptable.
 - **[Pitscheider/ha_inim_prime](https://github.com/Pitscheider/ha_inim_prime)** — a local Prime integration over the PrimeLAN Web API with rich fault/GSM diagnostics and four arm modes.
-- **[Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native)** (GPL-3.0) — a Python library for the panel's native TCP 6004 protocol. This integration's fast area and zone state path (partition and terminal status commands) and its native structure read (label tables, zone settings) follow the layouts documented there.
+- **[Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native)** (GPL-3.0) — a Python library for the panel's native TCP 6004 protocol. This integration's fast area and zone state path (partition and terminal status commands), its native structure read (label tables, zone settings) and its experimental native commands (set arming status, zone bypass, output, partition reset) follow the layouts documented there.
 - **[matteoraf/ha-inim_smartliving_alarm_panel](https://github.com/matteoraf/ha-inim_smartliving_alarm_panel)** — fully local integration for **SmartLiving** panels over the native TCP protocol.
 - **[nidble/pyinim](https://github.com/nidble/pyinim)** — a reusable async Python library for the INIM cloud API.
 

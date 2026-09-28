@@ -71,6 +71,13 @@ NATIVE_AREA_FAILURES_BEFORE_BACKOFF: Final = 3
 NATIVE_CGI_INTERVAL: Final = 300
 NATIVE_AREA_BACKOFF_TICKS: Final = 15
 
+# Native write commands over TCP 6004 (arm/disarm, scenarios, zone bypass,
+# outputs, alarm-memory reset) instead of the cgi. Off by default: the command
+# layouts come from Pitscheider's library and have not been live-verified by
+# this project, so the owner opts in after testing (docs/native-commands.md).
+CONF_NATIVE_COMMANDS: Final = "native_commands"
+DEFAULT_NATIVE_COMMANDS: Final = False
+
 # Read-only local protocol (TCP 6004) — MANDATORY. Reads the static scenario
 # definitions (for accurate multi-active scene sensors the cgi cannot express),
 # zone->area, and the precise panel model. The password is the panel LAN password

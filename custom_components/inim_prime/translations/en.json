@@ -65,12 +65,14 @@
           "webhook_enabled": "Enable realtime push (local webhook)",
           "label_language": "Zone label language (for icon guessing)",
           "group_by_room": "Group zones by room",
-          "native_area_poll": "Fast area and zone polling (native protocol)"
+          "native_area_poll": "Fast area and zone polling (native protocol)",
+          "native_commands": "Native commands (arm/disarm, bypass, outputs) — experimental"
         },
         "data_description": {
           "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language.",
           "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area.",
-          "native_area_poll": "Read the arm/disarm state of every area and the state of every zone every 2 seconds over the panel's native TCP 6004 protocol (read-only, ~10 ms per read). The slower cgi poll keeps running for everything else."
+          "native_area_poll": "Read the arm/disarm state of every area and the state of every zone every 2 seconds over the panel's native TCP 6004 protocol (read-only, ~10 ms per read). The slower cgi poll keeps running for everything else.",
+          "native_commands": "Send arm/disarm, scenarios, zone bypass, outputs and alarm-memory reset over the panel's native TCP 6004 protocol instead of the cgi. Off by default: these commands have not been verified on a live panel yet, so test them first (see docs/native-commands.md) and turn this off again to go back to the cgi. A command is retried over the cgi only when it certainly never reached the panel."
         }
       }
     }
@@ -182,6 +184,9 @@
     },
     "event_log_single_target": {
       "message": "Get event log accepts exactly one target entity."
+    },
+    "native_command_uncertain": {
+      "message": "The native command may have reached the panel, but its outcome is unknown ({error}). It was not retried; check the panel state before trying again."
     }
   },
   "selector": {

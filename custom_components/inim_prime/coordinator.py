@@ -166,6 +166,9 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         # setup when the option is enabled; failures never mark entities
         # unavailable (the cgi poll stays authoritative for availability).
         self.native_client: Local6004Client | None = None
+        # Set by setup when the "native commands" option is on: write commands
+        # then go over 6004 first (see commands.py). Independent of the poll.
+        self.command_client: Local6004Client | None = None
         self._native_failures = 0
         self._native_skip = 0
         # Last successful native reading and when it started (monotonic), so

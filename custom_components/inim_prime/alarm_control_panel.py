@@ -23,11 +23,12 @@ from .client import (
     InimApiError,
     InimConnectionError,
 )
+from .commands import async_arm_area
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
 
-# Arm/disarm issues panel writes; the cgi is single-threaded, so serialize
+# Arm/disarm issues panel writes (cgi or native, see commands.py); serialize
 # commands to one in flight at a time.
 PARALLEL_UPDATES = 1
 
@@ -184,7 +185,7 @@ class InimAlarmControlPanel(
     async def _arm(self, mode: ArmMode, optimistic: AlarmControlPanelState) -> None:
         """Arm the area in the given mode, optimistically updating state."""
         try:
-            await self.coordinator.client.arm_area(self._area_id, mode)
+            await async_arm_area(self.coordinator, self._area_id, mode)
         except (InimApiError, InimConnectionError) as err:
             self._raise_command_error(err)
         self._optimistic(optimistic)
@@ -193,7 +194,7 @@ class InimAlarmControlPanel(
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm command."""
         try:
-            await self.coordinator.client.disarm_area(self._area_id)
+            await async_arm_area(self.coordinator, self._area_id, ArmMode.DISARM)
         except (InimApiError, InimConnectionError) as err:
             self._raise_command_error(err)
         self._optimistic(AlarmControlPanelState.DISARMED)

@@ -90,6 +90,7 @@ def fake_coordinator(version, outputs, zones):
         config_entry=SimpleNamespace(entry_id="abc123", title="INIM Prime", options={}),
         hass=SimpleNamespace(config=SimpleNamespace(language="en")),
         local_config=None,
+        command_client=None,
         force_arm_on_open=False,
         last_update_success=True,
         async_request_refresh=AsyncMock(),

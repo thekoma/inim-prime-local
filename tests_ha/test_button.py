@@ -36,6 +36,7 @@ def _make_coordinator(
     coordinator.client = AsyncMock()
     coordinator.async_request_refresh = AsyncMock()
     coordinator.local_config = None
+    coordinator.command_client = None
     coordinator.force_arm_on_open = False
     coordinator.config_entry = MagicMock(entry_id="abc123", title="INIM Prime")
     coordinator.data = InimData(

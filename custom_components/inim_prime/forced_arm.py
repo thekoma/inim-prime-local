@@ -16,6 +16,12 @@ Safety model:
 - **Verified bypass**: we re-read the zones after writing, so a silently
   ineffective bypass is classified as unbypassable rather than assumed applied.
 - **Never silent**: every forced arm fires an ``inim_prime_forced_arm`` event.
+- **cgi only**, even with native commands on: the open-zone check is the
+  cgi's ``get_*_nrz``, which knows which zones each arming mode and scenario
+  actually uses (a partial arm skips internal zones). The native zone state
+  has no such per-mode view, and mixing channels between the check, the
+  bypasses, the verification re-read and the rollback would make the
+  rollback reason about two sources of truth.
 """
 
 from __future__ import annotations

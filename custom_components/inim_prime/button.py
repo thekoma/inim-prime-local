@@ -10,6 +10,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import ApiStatus, Area, InimApiError, InimConnectionError, Scenario
+from .commands import async_apply_scenario, async_clear_alarm_memory
 from .const import DOMAIN, is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
@@ -106,7 +107,7 @@ class InimClearAlarmMemoryButton(
     async def async_press(self) -> None:
         """Clear the alarm memory for this area."""
         try:
-            await self.coordinator.client.clear_alarm_memory(self._area_id)
+            await async_clear_alarm_memory(self.coordinator, self._area_id)
         except (InimApiError, InimConnectionError) as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
@@ -164,7 +165,8 @@ class InimApplyScenarioButton(
         """Activate this scenario on the panel.
 
         When the "force arm on open zones" switch is on, bypass the open zones
-        first (fail-closed) instead of failing; otherwise apply directly.
+        first (fail-closed) instead of failing; that path stays on the cgi (see
+        forced_arm.py). Otherwise apply directly, natively when enabled.
         """
         if self.coordinator.force_arm_on_open:
             # async_force_arm handles bypass/rollback/refresh and raises a
@@ -177,7 +179,7 @@ class InimApplyScenarioButton(
             )
             return
         try:
-            await self.coordinator.client.apply_scenario(self._scenario_id)
+            await async_apply_scenario(self.coordinator, self._scenario_id)
         except InimApiError as err:
             if err.status == ApiStatus.ZONES_NOT_READY:
                 raise HomeAssistantError(

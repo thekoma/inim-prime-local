@@ -21,6 +21,10 @@ from .local6004 import (
     Local6004Error,
     Local6004Structure,
     NativeAreaStatus,
+    NativeCommandError,
+    NativeCommandNotSent,
+    NativeCommandRejected,
+    NativeCommandUncertain,
     NativeObject,
     NativeZoneDef,
     NativeZoneStatus,
@@ -30,6 +34,7 @@ from .local6004 import (
     decode_scene,
     decode_terminal_statuses,
     scene_is_active,
+    scene_target_modes,
 )
 from .models import (
     FAULT_FLAG_KEYS,
@@ -77,6 +82,10 @@ __all__ = [
     "Local6004Error",
     "Local6004Structure",
     "NativeAreaStatus",
+    "NativeCommandError",
+    "NativeCommandNotSent",
+    "NativeCommandRejected",
+    "NativeCommandUncertain",
     "NativeObject",
     "NativeZoneDef",
     "NativeZoneStatus",
@@ -86,4 +95,5 @@ __all__ = [
     "decode_event_log",
     "decode_scene",
     "scene_is_active",
+    "scene_target_modes",
 ]
