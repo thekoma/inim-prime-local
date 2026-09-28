@@ -65,12 +65,12 @@
           "webhook_enabled": "Enable realtime push (local webhook)",
           "label_language": "Zone label language (for icon guessing)",
           "group_by_room": "Group zones by room",
-          "native_area_poll": "Fast area polling (native protocol)"
+          "native_area_poll": "Fast area and zone polling (native protocol)"
         },
         "data_description": {
           "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language.",
           "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area.",
-          "native_area_poll": "Read the arm/disarm state of every area every 2 seconds over the panel's native TCP 6004 protocol (read-only, ~10 ms per read). The slower cgi poll keeps running for everything else."
+          "native_area_poll": "Read the arm/disarm state of every area and the state of every zone every 2 seconds over the panel's native TCP 6004 protocol (read-only, ~10 ms per read). The slower cgi poll keeps running for everything else."
         }
       }
     }

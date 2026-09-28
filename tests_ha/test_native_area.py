@@ -17,6 +17,8 @@ from custom_components.inim_prime.client import (
     AreaState,
     Local6004Error,
     NativeAreaStatus,
+    NativeZoneStatus,
+    ZoneState,
 )
 from custom_components.inim_prime.const import (
     CONF_NATIVE_AREA_POLL,
@@ -41,6 +43,8 @@ async def _coordinator(
     mock_config_entry.add_to_hass(hass)
     coordinator = InimDataUpdateCoordinator(hass, mock_config_entry, mock_client)
     coordinator.async_set_updated_data(await coordinator._async_update_data())
+    if native is not None and not isinstance(native.async_get_zone_statuses.return_value, dict):
+        native.async_get_zone_statuses.return_value = {}
     coordinator.native_client = native
     return coordinator
 
@@ -55,7 +59,7 @@ async def test_native_change_is_published_and_arms_fast_poll(
     native.async_get_area_statuses.return_value = {1: ARMED}
     coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
 
-    await coordinator.async_native_area_poll()
+    await coordinator.async_native_poll()
 
     assert coordinator.data.areas[0].mode is AreaMode.TOTAL
     assert coordinator.update_interval == coordinator._active_interval
@@ -73,7 +77,7 @@ async def test_native_unchanged_state_does_not_publish(
     coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
     before = coordinator.data
 
-    await coordinator.async_native_area_poll()
+    await coordinator.async_native_poll()
 
     assert coordinator.data is before
     assert coordinator.update_interval == coordinator._idle_interval
@@ -116,12 +120,12 @@ async def test_native_poll_noop_without_client_or_data(
 ) -> None:
     """No native client, or no snapshot yet, means nothing to do."""
     coordinator = await _coordinator(hass, mock_config_entry, mock_client, None)
-    await coordinator.async_native_area_poll()  # no client
+    await coordinator.async_native_poll()  # no client
 
     native = AsyncMock()
     fresh = InimDataUpdateCoordinator(hass, mock_config_entry, mock_client)
     fresh.native_client = native
-    await fresh.async_native_area_poll()  # no data
+    await fresh.async_native_poll()  # no data
     native.async_get_area_statuses.assert_not_awaited()
 
 
@@ -136,17 +140,17 @@ async def test_native_failures_back_off_then_recover(
     coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
 
     for _ in range(NATIVE_AREA_FAILURES_BEFORE_BACKOFF):
-        await coordinator.async_native_area_poll()
+        await coordinator.async_native_poll()
     assert coordinator.last_update_success
     calls = native.async_get_area_statuses.await_count
 
     for _ in range(NATIVE_AREA_BACKOFF_TICKS):
-        await coordinator.async_native_area_poll()
+        await coordinator.async_native_poll()
     assert native.async_get_area_statuses.await_count == calls  # skipped
 
     native.async_get_area_statuses.side_effect = None
     native.async_get_area_statuses.return_value = {1: ARMED}
-    await coordinator.async_native_area_poll()
+    await coordinator.async_native_poll()
     assert coordinator._native_failures == 0
     assert coordinator.data.areas[0].mode is AreaMode.TOTAL
     coordinator.async_cancel_decay()
@@ -207,3 +211,73 @@ async def test_native_memory_only_does_not_raise_alarm(
     assert patched is not None
     assert patched.areas[0].state is AreaState.READY
     assert patched.areas[0].alarm_memory
+
+
+# sample_zones (conftest) has a single zone: id=1, READY, not excluded.
+OPEN = NativeZoneStatus(state=ZoneState.ALARM, excluded=False, alarm_memory=False)
+READY = NativeZoneStatus(state=ZoneState.READY, excluded=False, alarm_memory=False)
+
+
+async def test_native_zone_change_published_without_fast_poll(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """A zone change is published but does not push the cgi to its fast tier."""
+    native = AsyncMock()
+    native.async_get_area_statuses.return_value = {}
+    native.async_get_zone_statuses.return_value = {1: OPEN}
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+
+    await coordinator.async_native_poll()
+
+    native.async_get_zone_statuses.assert_awaited_once_with({1})
+    assert coordinator.data.zones[0].state is ZoneState.ALARM
+    assert coordinator.update_interval == coordinator._idle_interval
+
+
+async def test_native_area_and_zone_change_together(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """Area and zone changes land in one published snapshot."""
+    native = AsyncMock()
+    native.async_get_area_statuses.return_value = {1: ARMED}
+    native.async_get_zone_statuses.return_value = {
+        1: NativeZoneStatus(state=ZoneState.READY, excluded=True, alarm_memory=True)
+    }
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+
+    await coordinator.async_native_poll()
+
+    assert coordinator.data.areas[0].mode is AreaMode.TOTAL
+    assert coordinator.data.zones[0].excluded
+    assert coordinator.data.zones[0].alarm_memory
+    coordinator.async_cancel_decay()
+
+
+async def test_native_zone_unchanged_or_unknown(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """Matching or unknown zones leave the snapshot untouched."""
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, None)
+    assert coordinator.apply_native_zones(coordinator.data, {1: READY, 99: OPEN}) is None
+
+
+async def test_native_poll_skips_zone_read_without_zones(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """With no zones in the snapshot the terminal read is not issued."""
+    mock_client.get_zones.return_value = []
+    native = AsyncMock()
+    native.async_get_area_statuses.return_value = {}
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+
+    await coordinator.async_native_poll()
+
+    native.async_get_zone_statuses.assert_not_awaited()

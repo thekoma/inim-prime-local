@@ -29,6 +29,7 @@ from .client import (
     Local6004Config,
     Local6004Error,
     NativeAreaStatus,
+    NativeZoneStatus,
     Output,
     Scenario,
     Version,
@@ -347,34 +348,65 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         await super().async_shutdown()
 
     # ------------------------------------------------------------------
-    # Native fast path: live area state over the 6004 status command
+    # Native fast path: live area + zone state over the 6004 status commands
     # ------------------------------------------------------------------
-    async def async_native_area_poll(self, _now: object = None) -> None:
-        """Read live area state natively and push any change to entities.
+    async def async_native_poll(self, _now: object = None) -> None:
+        """Read live area and zone state natively and push any change to entities.
 
-        On a change the cached snapshot is patched and published immediately,
-        and a fast cgi poll is armed to reconcile the rest of the state. After
-        repeated failures the poll backs off for NATIVE_AREA_BACKOFF_TICKS ticks.
+        On a change the cached snapshot is patched and published immediately.
+        An area change also arms a fast cgi poll to reconcile the rest of the
+        state; zone changes do not (zones are fully covered natively, and doors
+        opening must not keep the cgi in its fast tier). After repeated
+        failures the poll backs off for NATIVE_AREA_BACKOFF_TICKS ticks.
         """
         if self.native_client is None or self.data is None:
             return
         if self._native_skip > 0:
             self._native_skip -= 1
             return
+        zone_ids = {zone.id for zone in self.data.zones}
         try:
             statuses = await self.native_client.async_get_area_statuses()
+            zone_statuses = (
+                await self.native_client.async_get_zone_statuses(zone_ids) if zone_ids else {}
+            )
         except Local6004Error as err:
             self._native_failures += 1
-            LOGGER.debug("Native area poll failed (%d): %s", self._native_failures, err)
+            LOGGER.debug("Native poll failed (%d): %s", self._native_failures, err)
             if self._native_failures >= NATIVE_AREA_FAILURES_BEFORE_BACKOFF:
                 self._native_skip = NATIVE_AREA_BACKOFF_TICKS
             return
         self._native_failures = 0
 
-        patched = self.apply_native_statuses(statuses)
+        area_patch = self.apply_native_statuses(statuses)
+        zone_patch = self.apply_native_zones(area_patch or self.data, zone_statuses)
+        patched = zone_patch or area_patch
         if patched is not None:
             self.async_set_updated_data(patched)
+        if area_patch is not None:
             self.activate_fast_poll()
+
+    @staticmethod
+    def apply_native_zones(
+        data: InimData, statuses: dict[int, NativeZoneStatus]
+    ) -> InimData | None:
+        """Return ``data`` with native zone state applied, or None if unchanged."""
+        zones: list[Zone] = []
+        changed = False
+        for zone in data.zones:
+            native = statuses.get(zone.id)
+            if native is None:
+                zones.append(zone)
+                continue
+            new = replace(
+                zone,
+                state=native.state,
+                alarm_memory=native.alarm_memory,
+                excluded=native.excluded,
+            )
+            changed = changed or new != zone
+            zones.append(new)
+        return replace(data, zones=zones) if changed else None
 
     def apply_native_statuses(self, statuses: dict[int, NativeAreaStatus]) -> InimData | None:
         """Return a snapshot with native area state applied, or None if unchanged."""
