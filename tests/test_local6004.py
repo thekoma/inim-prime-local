@@ -279,3 +279,118 @@ async def test_async_read_event_log_error(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(client, "_session", boom)
     with pytest.raises(m.Local6004Error):
         await client.async_read_event_log()
+
+
+# --------------------------------------------------------------- partition status
+def _status_resp(records: dict[int, bytes]) -> bytes:
+    """Build a partition-status response frame (18-byte header + 30 records)."""
+    data = bytearray(m._PARTITION_REC * m._PARTITION_COUNT)
+    for area_id, rec in records.items():
+        data[area_id * 3 : area_id * 3 + 3] = rec
+    return _resp(bytes(m._STATUS_HEADER) + bytes(data))
+
+
+def test_status_cmd_bytes_and_guard() -> None:
+    assert m._status_cmd(6) == b"\x06\x00\x00\x00\x74\x00\x00\x00\x00\x00"
+    with pytest.raises(AssertionError):
+        m._status_cmd(3)  # SET_ARMING_STATUS must never be built
+
+
+def test_decode_partition_statuses() -> None:
+    header = bytes(m._STATUS_HEADER)
+    data = bytearray(m._PARTITION_REC * m._PARTITION_COUNT)
+    data[0:3] = b"\x00\x04\x10"  # area 0: disarmed
+    data[3:6] = b"\x00\x00\x00"  # area 1: not configured
+    data[6:9] = b"\x01\x01\x11"  # area 2: armed away, alarm memory -> alarm
+    data[9:12] = b"\x00\x01\x10"  # area 3: armed away
+    data[12:15] = b"\x00\x09\x10"  # area 4: unknown mode -> skipped
+    data[15:18] = b"\x01\x04\x11"  # area 5: disarmed with memory -> no active alarm
+    data[18:21] = b"\x00\x01\x11"  # area 6: armed, retained memory only -> no alarm
+    out = m.decode_partition_statuses(header + bytes(data))
+    assert set(out) == {0, 2, 3, 5, 6}
+    assert out[6] == m.NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=True)
+    assert out[0] == m.NativeAreaStatus(mode=AreaMode.DISARMED, alarm=False, alarm_memory=False)
+    assert out[2] == m.NativeAreaStatus(mode=AreaMode.TOTAL, alarm=True, alarm_memory=True)
+    assert out[3] == m.NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=False)
+    assert out[5] == m.NativeAreaStatus(mode=AreaMode.DISARMED, alarm=False, alarm_memory=True)
+
+
+async def test_area_statuses_reuse_persistent_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    frames = [_status_resp({0: b"\x00\x04\x10"}), _status_resp({0: b"\x00\x01\x10"})]
+    pairs = _patch_sessions(monkeypatch, [frames])
+    client = m.Local6004Client("host", "pass")
+
+    first = await client.async_get_area_statuses()
+    second = await client.async_get_area_statuses()
+
+    assert first[0].mode is AreaMode.DISARMED
+    assert second[0].mode is AreaMode.TOTAL
+    # one connection, two status commands, both flagged as command frames
+    sent = pairs[0][1].sent
+    assert len(sent) == 2
+    assert all(frame[4:6] == b"\x01\x00" for frame in sent)
+    await client.async_close()
+    await client.async_close()  # idempotent
+
+
+async def test_area_statuses_error_drops_connection_and_reconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad = b"\xaa\xaa" + _status_resp({})[2:]
+    _patch_sessions(monkeypatch, [[bad], [_status_resp({3: b"\x00\x01\x10"})]])
+    client = m.Local6004Client("host", "pass")
+
+    with pytest.raises(m.Local6004Error):
+        await client.async_get_area_statuses()
+    assert client._status_conn is None
+
+    assert (await client.async_get_area_statuses())[3].mode is AreaMode.TOTAL
+
+
+async def test_area_statuses_timeout_and_close_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _HangingReader(_FakeReader):
+        async def readexactly(self, n: int) -> bytes:
+            await asyncio.sleep(5)
+            return b""
+
+    class _RaisingWriter(_FakeWriter):
+        async def wait_closed(self) -> None:
+            raise OSError("already closed")
+
+    async def fake_open(host: str, port: int):  # noqa: ANN202
+        return _HangingReader(b""), _RaisingWriter()
+
+    monkeypatch.setattr(m.asyncio, "open_connection", fake_open)
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.Local6004Error, match="TimeoutError"):
+        await client.async_get_area_statuses(timeout=0.05)
+    assert client._status_conn is None
+
+
+def test_decode_partition_statuses_rejects_short_response() -> None:
+    with pytest.raises(ValueError, match="short"):
+        m.decode_partition_statuses(bytes(m._STATUS_HEADER + 10))
+
+
+async def test_area_statuses_short_response_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sessions(monkeypatch, [[_resp(bytes(m._STATUS_HEADER))]])
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.Local6004Error, match="short"):
+        await client.async_get_area_statuses()
+    assert client._status_conn is None
+
+
+async def test_close_does_not_hang_on_stalled_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _StalledWriter(_FakeWriter):
+        async def wait_closed(self) -> None:
+            await asyncio.sleep(10)
+
+    async def fake_open(host: str, port: int):  # noqa: ANN202
+        return _FakeReader(_status_resp({})), _StalledWriter()
+
+    monkeypatch.setattr(m.asyncio, "open_connection", fake_open)
+    monkeypatch.setattr(m, "_CLOSE_TIMEOUT", 0.05)
+    client = m.Local6004Client("host", "pass")
+    await client.async_get_area_statuses()
+    await asyncio.wait_for(client.async_close(), 1)  # bounded, lock released
+    assert client._status_conn is None

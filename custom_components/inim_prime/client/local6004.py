@@ -15,9 +15,18 @@ LEN(LE total) | 00 00 | AES-128-CBC ciphertext``. A connection opens with a
 context op-code; reads use op 0x11 (start) / 0x10 (continue) with
 ``[addr:4 LE][0000:4][len:4 LE][len:4 LE][00 00][op][chk=sum(prev19)&0xff]``.
 
-⚠️ READ-ONLY: this module only ever emits the two read opcodes. It never builds
-a write/program frame (a write is the same framing with a write opcode — on a
-production panel a stray write could brick it). ``_read_cmd`` asserts the opcode.
+⚠️ READ-ONLY: this module only ever emits the two read opcodes plus the
+read-only *status* command (op 6, partition statuses). It never builds a
+write/program frame (a write is the same framing with a write opcode — on a
+production panel a stray write could brick it). ``_read_cmd`` and
+``_status_cmd`` assert their opcodes.
+
+Live partition status (op 6) follows the command layout documented by
+Pitscheider's inim-prime-native (https://github.com/Pitscheider/inim-prime-native,
+GPL-3.0): request ``[op:4 LE][pin:6]`` (``74 00..`` = no PIN), response
+``[header:18][3 bytes x 30 partitions]``; each record is
+``[alarm flags][AreaMode][0x10 configured | 0x01 alarm memory]``. It answers in
+~10 ms even when the cgi takes seconds, so it is the fast path for area state.
 
 The EEPROM config offsets below are the **40x** layout (PrimeX firmware 4.x),
 which is a compile-time-constant memory map in the official client. They are
@@ -46,6 +55,15 @@ _CHUNK = 1024
 _OPEN_CFG = b"\x17\x00\x00\x00\x00"  # 0x140xxxxx config region
 _OPEN_VER = b"\x0d\x00\x00\x00\x00"  # version region
 _OPEN_LOG = b"\x1f\x00\x00\x00\x00"  # low-address event-log region
+
+# Read-only status command: live partition statuses.
+_OP_PARTITION_STATUS = 6
+_NO_PIN = b"\x74\x00\x00\x00\x00\x00"
+_STATUS_HEADER = 18
+_PARTITION_REC = 3
+_PARTITION_COUNT = 30
+_PARTITION_CONFIGURED = 0x10
+_CLOSE_TIMEOUT = 1.0
 
 # Event log (40x): ring of 14-byte records at 0xA1D0.
 _LOG_ADDR = 0xA1D0
@@ -157,6 +175,54 @@ def _read_cmd(addr: int, length: int, *, cont: bool) -> bytes:
     return bytes(body)
 
 
+def _status_cmd(op: int) -> bytes:
+    """Build a read-only status command body (no PIN)."""
+    assert op == _OP_PARTITION_STATUS, "READ-ONLY guard"
+    return op.to_bytes(4, "little") + _NO_PIN
+
+
+@dataclass(frozen=True)
+class NativeAreaStatus:
+    """Live state of one partition, as reported by the status command."""
+
+    mode: AreaMode
+    alarm: bool
+    alarm_memory: bool
+
+
+def decode_partition_statuses(resp: bytes) -> dict[int, NativeAreaStatus]:
+    """Decode a partition-status response into ``{area_id: status}``.
+
+    Unconfigured partitions (configured bit clear) and records with an unknown
+    mode byte are skipped. A response shorter than the documented header plus
+    all records raises ``ValueError`` rather than yielding partial data.
+
+    ``alarm`` comes from the active alarm flag (record byte 0) only; the
+    retained memory bit (byte 2) never makes an area read as alarming by
+    itself. Memory is set whenever either bit is set.
+    """
+    size = _PARTITION_REC * _PARTITION_COUNT
+    if len(resp) < _STATUS_HEADER + size:
+        raise ValueError(f"short partition-status response ({len(resp)} bytes)")
+    data = resp[_STATUS_HEADER : _STATUS_HEADER + size]
+    out: dict[int, NativeAreaStatus] = {}
+    for area_id in range(_PARTITION_COUNT):
+        flags, mode_byte, status = data[area_id * _PARTITION_REC : (area_id + 1) * _PARTITION_REC]
+        if not status & _PARTITION_CONFIGURED:
+            continue
+        try:
+            mode = AreaMode(mode_byte)
+        except ValueError:
+            continue
+        active = bool(flags & 0x01)
+        out[area_id] = NativeAreaStatus(
+            mode=mode,
+            alarm=active and mode is not AreaMode.DISARMED,
+            alarm_memory=active or bool(status & 0x01),
+        )
+    return out
+
+
 # --------------------------------------------------------------------- decode
 def decode_scene(modo6: bytes) -> dict[int, str]:
     """Decode the 6 MODO bytes of a scenario into ``{partition_index: mode}``.
@@ -257,6 +323,43 @@ class Local6004Client:
         self._port = port
         self._timeout = timeout
         self._key, self._iv = make_key_iv(password)
+        # Persistent connection for the frequent status command; opened lazily,
+        # dropped on any error and re-opened on the next call.
+        self._status_conn: tuple[asyncio.StreamReader, asyncio.StreamWriter] | None = None
+        self._status_lock = asyncio.Lock()
+
+    async def async_get_area_statuses(self, timeout: float = 3.0) -> dict[int, NativeAreaStatus]:
+        """Return live partition statuses over a persistent connection (read-only)."""
+        async with self._status_lock:
+            try:
+                return await asyncio.wait_for(self._get_area_statuses(), timeout)
+            except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as err:
+                await self._close_status_conn()
+                raise Local6004Error(str(err) or type(err).__name__) from err
+
+    async def _get_area_statuses(self) -> dict[int, NativeAreaStatus]:
+        if self._status_conn is None:
+            self._status_conn = await asyncio.open_connection(self._host, self._port)
+        reader, writer = self._status_conn
+        resp = await self._xfer(reader, writer, _status_cmd(_OP_PARTITION_STATUS), first=True)
+        return decode_partition_statuses(resp)
+
+    async def async_close(self) -> None:
+        """Close the persistent status connection, if open."""
+        async with self._status_lock:
+            await self._close_status_conn()
+
+    async def _close_status_conn(self) -> None:
+        if self._status_conn is None:
+            return
+        _, writer = self._status_conn
+        self._status_conn = None
+        writer.close()
+        # Bounded: a stalled socket must not keep holding the status lock.
+        try:
+            await asyncio.wait_for(writer.wait_closed(), _CLOSE_TIMEOUT)
+        except (OSError, TimeoutError):
+            pass
 
     async def async_read_config(self) -> Local6004Config:
         """Connect, read the static config (read-only), and disconnect."""

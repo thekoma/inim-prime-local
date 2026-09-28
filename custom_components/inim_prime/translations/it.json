@@ -64,11 +64,13 @@
           "scan_interval_active": "Intervallo di polling attivo (secondi)",
           "webhook_enabled": "Abilita push realtime (webhook locale)",
           "label_language": "Lingua dei nomi zona (per le icone)",
-          "group_by_room": "Raggruppa le zone per stanza"
+          "group_by_room": "Raggruppa le zone per stanza",
+          "native_area_poll": "Polling veloce delle aree (protocollo nativo)"
         },
         "data_description": {
           "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant.",
-          "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant."
+          "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant.",
+          "native_area_poll": "Legge lo stato di inserimento di ogni area ogni 2 secondi tramite il protocollo nativo TCP 6004 del pannello (sola lettura, ~10 ms a lettura). Il polling cgi più lento continua per tutto il resto."
         }
       }
     }

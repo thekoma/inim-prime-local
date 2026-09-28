@@ -44,6 +44,16 @@ So a poll cycle that starts after the idle interval pays the re-read cost and ca
 - keep the idle interval at the 30 s default (or higher) so the panel is not saturated;
 - use push ([realtime.md](realtime.md)) so arm/disarm events do not depend on polling at all.
 
+## Fast area polling (native protocol)
+The arm/disarm state of every area is also read every **2 s** over the panel's native TCP 6004 protocol, using the read-only *partition status* command (the same channel PrimeStudio uses; the command layout follows [Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native)). Measured on a PrimeX 4.07:
+
+| | Native partition status | cgi `get_partitions_status` |
+|---|---|---|
+| Back-to-back | ~6–12 ms | ~0.45–0.7 s |
+| First read after a 25 s pause | ~15–430 ms | ~2 s |
+
+When the native read sees a change, entities update immediately and a fast cgi poll reconciles the rest. The channel uses one persistent TCP connection (the panel accepts several concurrent 6004 clients, so PrimeStudio can still connect). Native failures never mark entities unavailable: after 3 consecutive failures the native poll backs off to every ~30 s, and availability stays driven by the cgi poll. Disable it with **Fast area polling (native protocol)** in the options.
+
 ## Recommended profiles
 | Goal | Idle | Active | Push |
 |---|---|---|---|

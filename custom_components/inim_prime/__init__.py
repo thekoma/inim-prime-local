@@ -2,25 +2,31 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .client import InimPrimeClient, Local6004Client, Local6004Error
 from .const import (
     CONF_APIKEY,
     CONF_LOCAL_PASSWORD,
+    CONF_NATIVE_AREA_POLL,
     CONF_USE_HTTPS,
     CONF_WEBHOOK_ENABLED,
+    DEFAULT_NATIVE_AREA_POLL,
     DEFAULT_PORT,
     DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_USE_HTTPS,
     DOMAIN,
     LOCAL_6004_PORT,
     LOGGER,
+    NATIVE_AREA_POLL_INTERVAL,
     PLATFORMS,
 )
 from .coordinator import (
@@ -71,6 +77,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
 
     if entry.options.get(CONF_WEBHOOK_ENABLED):
         async_register_webhook(hass, entry)
+
+    if entry.options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL):
+        # Fast area state over the native read-only status command. The
+        # persistent connection is closed on unload.
+        coordinator.native_client = local_client
+        entry.async_on_unload(
+            async_track_time_interval(
+                hass,
+                coordinator.async_native_area_poll,
+                timedelta(seconds=NATIVE_AREA_POLL_INTERVAL),
+                name="inim_prime native area poll",
+                cancel_on_shutdown=True,
+            )
+        )
+        entry.async_on_unload(local_client.async_close)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

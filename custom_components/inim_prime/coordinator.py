@@ -27,6 +27,8 @@ from .client import (
     InimPrimeClient,
     Local6004Client,
     Local6004Config,
+    Local6004Error,
+    NativeAreaStatus,
     Output,
     Scenario,
     Version,
@@ -56,6 +58,8 @@ from .const import (
     FAILURES_BEFORE_BACKOFF,
     FAILURES_BEFORE_UNAVAILABLE,
     LOGGER,
+    NATIVE_AREA_BACKOFF_TICKS,
+    NATIVE_AREA_FAILURES_BEFORE_BACKOFF,
 )
 
 
@@ -150,6 +154,13 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         # is reused so each cycle costs one cgi read less.
         self._api_stats: ApiStats | None = None
         self._api_stats_at: float | None = None
+
+        # Fast area-state path over the native 6004 status command. Set by
+        # setup when the option is enabled; failures never mark entities
+        # unavailable (the cgi poll stays authoritative for availability).
+        self.native_client: Local6004Client | None = None
+        self._native_failures = 0
+        self._native_skip = 0
 
         super().__init__(
             hass,
@@ -334,6 +345,58 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         """Cancel the decay timer, then perform the base coordinator shutdown."""
         self.async_cancel_decay()
         await super().async_shutdown()
+
+    # ------------------------------------------------------------------
+    # Native fast path: live area state over the 6004 status command
+    # ------------------------------------------------------------------
+    async def async_native_area_poll(self, _now: object = None) -> None:
+        """Read live area state natively and push any change to entities.
+
+        On a change the cached snapshot is patched and published immediately,
+        and a fast cgi poll is armed to reconcile the rest of the state. After
+        repeated failures the poll backs off for NATIVE_AREA_BACKOFF_TICKS ticks.
+        """
+        if self.native_client is None or self.data is None:
+            return
+        if self._native_skip > 0:
+            self._native_skip -= 1
+            return
+        try:
+            statuses = await self.native_client.async_get_area_statuses()
+        except Local6004Error as err:
+            self._native_failures += 1
+            LOGGER.debug("Native area poll failed (%d): %s", self._native_failures, err)
+            if self._native_failures >= NATIVE_AREA_FAILURES_BEFORE_BACKOFF:
+                self._native_skip = NATIVE_AREA_BACKOFF_TICKS
+            return
+        self._native_failures = 0
+
+        patched = self.apply_native_statuses(statuses)
+        if patched is not None:
+            self.async_set_updated_data(patched)
+            self.activate_fast_poll()
+
+    def apply_native_statuses(self, statuses: dict[int, NativeAreaStatus]) -> InimData | None:
+        """Return a snapshot with native area state applied, or None if unchanged."""
+        data = self.data
+        if data is None:
+            return None
+        areas: list[Area] = []
+        changed = False
+        for area in data.areas:
+            native = statuses.get(area.id)
+            if native is None:
+                areas.append(area)
+                continue
+            state = area.state
+            if native.alarm:
+                state = AreaState.ALARM
+            elif state is AreaState.ALARM:
+                state = AreaState.READY
+            new = replace(area, mode=native.mode, state=state, alarm_memory=native.alarm_memory)
+            changed = changed or new != area
+            areas.append(new)
+        return replace(data, areas=areas) if changed else None
 
     # ------------------------------------------------------------------
     # Optimistic event patching (webhook fast-path)
