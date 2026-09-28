@@ -54,7 +54,9 @@ The arm/disarm state of every area, and the state of every zone (open/closed, ex
 
 Zones are read only for the terminals that host a configured zone, in requests of up to 20 terminals; on a PrimeX with 20 zones one full native cycle (areas + zones) takes ~15–50 ms. Zone *n* is half A of terminal *n*, zone *n + 1005* is half B of terminal *n* on double-zone terminals.
 
-When the native read sees a change, entities update immediately. An **area** change also arms a fast cgi poll to reconcile the rest; zone changes do not, so doors opening and closing never keep the cgi in its fast tier. The channel uses one persistent TCP connection (the panel accepts several concurrent 6004 clients, so PrimeStudio can still connect). Native failures never mark entities unavailable: after 3 consecutive failures the native poll backs off to every ~30 s, and availability stays driven by the cgi poll. Disable it with **Fast area and zone polling (native protocol)** in the options.
+When the native read sees a change, entities update immediately. An **area** change also arms a fast cgi poll to reconcile the rest; zone changes do not, so doors opening and closing never keep the cgi in its fast tier. The channel uses one persistent TCP connection (the panel accepts several concurrent 6004 clients, so PrimeStudio can still connect). While the native poll is healthy the cgi poll rests at **5 minutes** instead of the idle interval (areas, zones and scenario state are native; the cgi then only refreshes outputs, faults and diagnostics). A longer idle interval set in the options is kept. After an area change the usual fast cgi window still runs, then relaxes back to 5 minutes.
+
+Native failures never mark entities unavailable: after 3 consecutive failures the native poll backs off to every ~30 s, the cgi poll returns to the idle interval, and availability stays driven by the cgi poll. Disable it with **Fast area and zone polling (native protocol)** in the options.
 
 ## Recommended profiles
 | Goal | Idle | Active | Push |

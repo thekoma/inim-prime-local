@@ -25,6 +25,7 @@ from custom_components.inim_prime.const import (
     NATIVE_AREA_BACKOFF_TICKS,
     NATIVE_AREA_FAILURES_BEFORE_BACKOFF,
     NATIVE_AREA_POLL_INTERVAL,
+    NATIVE_CGI_INTERVAL,
 )
 from custom_components.inim_prime.coordinator import InimDataUpdateCoordinator
 
@@ -45,7 +46,8 @@ async def _coordinator(
     coordinator.async_set_updated_data(await coordinator._async_update_data())
     if native is not None and not isinstance(native.async_get_zone_statuses.return_value, dict):
         native.async_get_zone_statuses.return_value = {}
-    coordinator.native_client = native
+    if native is not None:
+        coordinator.async_attach_native(native)
     return coordinator
 
 
@@ -80,7 +82,7 @@ async def test_native_unchanged_state_does_not_publish(
     await coordinator.async_native_poll()
 
     assert coordinator.data is before
-    assert coordinator.update_interval == coordinator._idle_interval
+    assert coordinator.update_interval == coordinator.rest_interval
 
 
 def test_apply_native_statuses_without_snapshot(
@@ -233,7 +235,7 @@ async def test_native_zone_change_published_without_fast_poll(
 
     native.async_get_zone_statuses.assert_awaited_once_with({1})
     assert coordinator.data.zones[0].state is ZoneState.ALARM
-    assert coordinator.update_interval == coordinator._idle_interval
+    assert coordinator.update_interval == coordinator.rest_interval
 
 
 async def test_native_area_and_zone_change_together(
@@ -343,3 +345,77 @@ async def test_cgi_cycle_wins_over_older_native_state(
     data = await coordinator._async_update_data()  # cgi (newer) says disarmed
 
     assert data.areas[0].mode is AreaMode.DISARMED
+
+
+REST = timedelta(seconds=NATIVE_CGI_INTERVAL)
+
+
+async def test_attaching_native_relaxes_cgi_interval(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """With a healthy native poll the cgi rests at NATIVE_CGI_INTERVAL."""
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, AsyncMock())
+    assert coordinator.native_healthy
+    assert coordinator.rest_interval == REST
+    assert coordinator.update_interval == REST
+
+
+async def test_idle_interval_longer_than_rest_is_kept(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """A user idle interval above the native resting interval wins."""
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry, options={"scan_interval_idle": NATIVE_CGI_INTERVAL * 2}
+    )
+    coordinator = InimDataUpdateCoordinator(hass, mock_config_entry, mock_client)
+    coordinator.async_attach_native(AsyncMock())
+    assert coordinator.update_interval == timedelta(seconds=NATIVE_CGI_INTERVAL * 2)
+
+
+async def test_native_backoff_restores_idle_then_recovery_relaxes(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """A failing native channel puts the cgi back on idle; recovery relaxes it."""
+    native = AsyncMock()
+    native.async_get_area_statuses.side_effect = Local6004Error("down")
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+
+    for _ in range(NATIVE_AREA_FAILURES_BEFORE_BACKOFF):
+        await coordinator.async_native_poll()
+    assert not coordinator.native_healthy
+    assert coordinator.update_interval == coordinator._idle_interval
+
+    for _ in range(NATIVE_AREA_BACKOFF_TICKS):
+        await coordinator.async_native_poll()
+    native.async_get_area_statuses.side_effect = None
+    native.async_get_area_statuses.return_value = {}
+    await coordinator.async_native_poll()
+    assert coordinator.native_healthy
+    assert coordinator.update_interval == REST
+
+
+async def test_fast_window_decays_to_rest_interval(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """After an area change the fast window ends at the resting interval."""
+    native = AsyncMock()
+    native.async_get_area_statuses.return_value = {1: ARMED}
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+
+    await coordinator.async_native_poll()
+    assert coordinator.update_interval == coordinator._active_interval
+    coordinator._relax_to_rest()  # no-op while the fast window runs
+    assert coordinator.update_interval == coordinator._active_interval
+
+    coordinator.async_cancel_decay()
+    coordinator._decay_to_idle()
+    assert coordinator.update_interval == REST

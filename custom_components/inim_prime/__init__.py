@@ -81,7 +81,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
     if entry.options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL):
         # Fast area state over the native read-only status command. The
         # persistent connection is closed on unload.
-        coordinator.native_client = local_client
+        coordinator.async_attach_native(local_client)
         entry.async_on_unload(
             async_track_time_interval(
                 hass,

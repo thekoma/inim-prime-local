@@ -66,6 +66,9 @@ NATIVE_AREA_POLL_INTERVAL: Final = 2
 # After this many consecutive native failures, only retry every
 # NATIVE_AREA_BACKOFF_TICKS ticks so a dead channel is not hammered.
 NATIVE_AREA_FAILURES_BEFORE_BACKOFF: Final = 3
+# Resting cgi interval (seconds) while the native poll is healthy: the cgi then
+# only refreshes outputs, faults and diagnostics.
+NATIVE_CGI_INTERVAL: Final = 300
 NATIVE_AREA_BACKOFF_TICKS: Final = 15
 
 # Read-only local protocol (TCP 6004) — MANDATORY. Reads the static scenario
