@@ -107,7 +107,9 @@ class Output:
     id: int
     label: str
     terminal: int
-    state: int
+    # None when unknown: an output the native structure lists but the cgi
+    # does not report.
+    state: int | None
     type: int
 
     @classmethod

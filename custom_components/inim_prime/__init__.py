@@ -64,12 +64,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
     )
 
     coordinator = InimDataUpdateCoordinator(hass, entry, client)
-    await coordinator.async_config_entry_first_refresh()
 
-    # Read-only local (TCP 6004) is MANDATORY: read the static scenario
-    # definitions once (multi-active scenes, zone->area, precise model). A
-    # failure aborts setup — there is no cgi-only fallback by design.
+    # Read-only local (TCP 6004) is MANDATORY: read the static structure and
+    # scenario definitions once (which objects exist and their labels,
+    # multi-active scenes, zone->area, precise model). A failure aborts setup —
+    # there is no cgi-only fallback by design. It runs before the first cgi
+    # refresh so the first snapshot, and so every entity, already uses the
+    # native structure.
     local_client = await _async_setup_local(hass, entry, coordinator)
+    await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = InimRuntimeData(
         client=client, coordinator=coordinator, local_client=local_client
@@ -129,11 +132,22 @@ async def _async_setup_local(
             f"Panel firmware '{config.firmware}' is not a supported PrimeX 4.x layout."
         )
     coordinator.local_config = config
-    LOGGER.debug(
-        "Local 6004 active: %d scene definitions, %d zone->area maps",
-        len(config.scenes),
-        len(config.zone_areas),
-    )
+    structure = config.structure
+    if structure is None:
+        LOGGER.warning(
+            "Could not read the panel structure over the native channel;"
+            " using the cgi object list and names"
+        )
+    else:
+        LOGGER.debug(
+            "Local 6004 active: %d scene definitions, %d areas, %d zones, %d scenarios,"
+            " %d outputs",
+            len(config.scenes),
+            len(structure.areas),
+            len(structure.zones),
+            len(structure.scenarios),
+            len(structure.outputs),
+        )
     return local_client
 
 

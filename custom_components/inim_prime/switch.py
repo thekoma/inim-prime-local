@@ -120,9 +120,9 @@ class InimOutputSwitch(CoordinatorEntity[InimDataUpdateCoordinator], SwitchEntit
 
     @property
     def is_on(self) -> bool | None:
-        """Return whether the output is active (state != 0)."""
+        """Return whether the output is active (state != 0), None if unknown."""
         output = self._output
-        if output is None:
+        if output is None or output.state is None:
             return None
         return output.state != 0
 

@@ -95,6 +95,11 @@ def test_scene_is_active() -> None:
 
 
 # --------------------------------------------------------------- async client
+def _decrypt(frame: bytes) -> bytes:
+    """Recover the application payload a client frame carries."""
+    return m._unpad(m._aes(_KEY, _IV, frame[10:], decrypt=True))
+
+
 def _resp(plaintext: bytes) -> bytes:
     """Build a response frame the way the panel would (reuses the same crypto)."""
     return m._build_frame(plaintext, _KEY, _IV, first=False)
@@ -133,6 +138,7 @@ class _FakeWriter:
 def _patch_sessions(monkeypatch: pytest.MonkeyPatch, sessions: list[list[bytes]]) -> list:
     """Make asyncio.open_connection serve one pre-scripted fake stream per call."""
     pairs = [(_FakeReader(b"".join(frames)), _FakeWriter()) for frames in sessions]
+    monkeypatch.setattr(m, "STRUCTURE_TIMEOUT", 5)
     it = iter(pairs)
 
     async def fake_open(host: str, port: int):  # noqa: ANN202
@@ -152,31 +158,184 @@ def _modi_frame() -> bytes:
     return _resp(bytes(modi))
 
 
-def _zone_frames() -> list[bytes]:
-    zone = bytearray(m._ZONE_CFG_REC * m._ZONE_COUNT)
-    zone[0] = 0x01  # zone 0 -> area 0
-    zone[m._ZONE_CFG_REC] = 0x06  # zone 1 -> areas 1 and 2
-    blob = bytes(zone)
-    # the client reads in 1024-byte chunks
-    return [_resp(blob[i : i + 1024]) for i in range(0, len(blob), 1024)]
+def _label(text: str) -> bytes:
+    return text.encode("latin-1").ljust(m._LABEL_REC, b" ")
+
+
+def _structure_sessions(terminals: dict[int, int]) -> list[bytes]:
+    """Script the status-command session: partitions 0 and 2 configured, then
+    every terminal chunk (unlisted terminals are disabled)."""
+    part = bytearray(m._PARTITION_REC * m._PARTITION_COUNT)
+    part[2] = part[8] = m._PARTITION_CONFIGURED
+    frames = [_resp(bytes(m._STATUS_HEADER) + bytes(part))]
+    for start in range(0, m._TERMINAL_COUNT, m._TERMINAL_CHUNK):
+        end = min(start + m._TERMINAL_CHUNK, m._TERMINAL_COUNT)
+        records = [_term(terminals.get(t, 4)) for t in range(start, end)]
+        frames.append(_resp(bytes(m._STATUS_HEADER) + b"".join(records)))
+    return frames
+
+
+def _config_frames(zones: dict[int, tuple[str, int]], spans: list[tuple[int, int]]) -> list[bytes]:
+    """Script the structure session: ack, labels, zone spans."""
+    areas = b"".join(
+        _label(n) for n in ["Home", "AREA       002", "Garage"] + ["AREA"] * 27
+    )
+    scenarios = b"".join(
+        [_label("Away"), _label("Scenario 2"), _label("Scenario 9"), _label("")]
+        + [_label(f"SCENARIO   {i + 1:03d}") for i in range(4, m._SCENARIO_COUNT)]
+    )
+    outputs = b"".join(_label(n) for n in ("Siren", "Buzzer", "Box", "AUX 1", "AUX 2"))
+    frames = [_resp(b"\x00\x00\x00\x00"), _resp(areas), _resp(scenarios)]
+    frames.append(_resp(outputs))
+    for first, last in spans:
+        labels = bytearray()
+        settings = bytearray()
+        for zid in range(first, last + 1):
+            label, mask = zones.get(zid, ("", 0))
+            labels += label.encode("latin-1").ljust(16, b"\x00")
+            settings += mask.to_bytes(4, "little") + bytes(m._ZONE_CFG_REC - 4)
+        frames += [_resp(bytes(labels)), _resp(bytes(settings))]
+    return frames
 
 
 async def test_async_read_config_success(monkeypatch: pytest.MonkeyPatch) -> None:
     ack = _resp(b"\x00\x00\x00\x00")
-    _patch_sessions(
+    # t0 double, t1 single, t2 single but in no partition, t3 unknown type,
+    # t5 double; outputs 1005 and 1007 (1006 disabled).
+    terminals = {0: 3, 1: 0, 2: 0, 3: 2, 5: 3, 1005: 1, 1007: 1}
+    zones = {
+        0: ("Door", 0x01),
+        1: ("Window", 0x06),
+        2: ("Unused", 0),
+        5: ("Hall", 1 << 29),
+        1005: ("Door B", 0x01),
+        1010: ("Hall B", 0x04),
+    }
+    pairs = _patch_sessions(
         monkeypatch,
         [
             [ack, _version_frame("4.07 PX020")],
-            [ack, _modi_frame(), *_zone_frames()],
+            [ack, _modi_frame()],
+            _structure_sessions(terminals),
+            _config_frames(zones, [(0, 5), (1005, 1010)]),
         ],
     )
     cfg = await m.Local6004Client("host", "pass").async_read_config()
+    # The structure scan sends only read-only status commands, with no context
+    # op: a partition status, then every terminal chunk.
+    sent = [_decrypt(frame) for frame in pairs[2][1].sent]
+    assert sent[0] == m._status_cmd(6)
+    assert all(body[:4] == b"\x07\x00\x00\x00" for body in sent[1:])
+    assert len(sent) == 1 + 51
+    # The label session opens with the config context, then only reads.
+    labels = [_decrypt(frame) for frame in pairs[3][1].sent]
+    assert labels[0] == m._OPEN_CFG
+    assert {body[18] for body in labels[1:]} <= {m._READ_START, m._READ_CONT}
     assert cfg.layout_ok
     assert cfg.firmware == "4.07 PX020"
     assert [s.id for s in cfg.scenes] == [0]
     assert cfg.scenes[0].arms == {0: "away", 1: "away", 2: "away"}
-    assert cfg.zone_areas[0] == [0]
-    assert cfg.zone_areas[1] == [1, 2]
+    assert cfg.zone_areas == {0: [0], 1005: [0], 1: [1, 2], 5: [29], 1010: [2]}
+    st = cfg.structure
+    assert st is not None
+    assert st.areas == [m.NativeObject(0, "Home"), m.NativeObject(2, "Garage")]
+    # terminal order, half A before half B; zone 2 (no partition) is dropped
+    assert st.zones == [
+        m.NativeZoneDef(0, "Door", 0, (0,)),
+        m.NativeZoneDef(1005, "Door B", 0, (0,)),
+        m.NativeZoneDef(1, "Window", 1, (1, 2)),
+        m.NativeZoneDef(5, "Hall", 5, (29,)),
+        m.NativeZoneDef(1010, "Hall B", 5, (2,)),
+    ]
+    # "Scenario 2" is scenario 1's default; "Scenario 9" on scenario 2 is not
+    assert st.scenarios == [m.NativeObject(0, "Away"), m.NativeObject(2, "Scenario 9")]
+    assert st.outputs == [m.NativeObject(1005, "Siren"), m.NativeObject(1007, "Box")]
+
+
+async def test_async_read_config_without_zones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A panel with no zone terminals reads no zone spans."""
+
+    class _RaisingWriter(_FakeWriter):
+        async def wait_closed(self) -> None:
+            raise OSError("already closed")
+
+    ack = _resp(b"\x00\x00\x00\x00")
+    streams = iter(
+        [
+            (_FakeReader(ack + _version_frame("4.07 PX020")), _FakeWriter()),
+            (_FakeReader(ack + _modi_frame()), _FakeWriter()),
+            (_FakeReader(b"".join(_structure_sessions({}))), _RaisingWriter()),
+            (_FakeReader(b"".join(_config_frames({}, []))), _FakeWriter()),
+        ]
+    )
+
+    async def fake_open(host: str, port: int):  # noqa: ANN202
+        return next(streams)
+
+    monkeypatch.setattr(m.asyncio, "open_connection", fake_open)
+    cfg = await m.Local6004Client("host", "pass").async_read_config()
+    assert cfg.structure is not None
+    assert cfg.structure.zones == []
+    assert cfg.zone_areas == {}
+
+
+@pytest.mark.parametrize("stream", ["short", "truncated"])
+async def test_structure_failure_keeps_the_config(
+    monkeypatch: pytest.MonkeyPatch, stream: str
+) -> None:
+    """A failed structure read leaves structure None; the config still loads."""
+    ack = _resp(b"\x00\x00\x00\x00")
+    status = _resp(bytes(m._STATUS_HEADER)) if stream == "short" else b""
+    _patch_sessions(
+        monkeypatch,
+        [[ack, _version_frame("4.07 PX020")], [ack, _modi_frame()], [status]],
+    )
+    cfg = await m.Local6004Client("host", "pass").async_read_config()
+    assert cfg.layout_ok
+    assert [s.id for s in cfg.scenes] == [0]
+    assert cfg.structure is None
+    assert cfg.zone_areas == {}
+
+
+async def test_async_read_config_truncated_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A connection closed mid-frame is a Local6004Error, not a crash."""
+    _patch_sessions(monkeypatch, [[b"\x50\x50"]])
+    with pytest.raises(m.Local6004Error, match="expected bytes"):
+        await m.Local6004Client("host", "pass").async_read_config()
+
+
+def test_decode_label() -> None:
+    assert m.decode_label(b"AREA       006  ") == "AREA       006"
+    assert m.decode_label(b"Box\x00\x00garbage\x00\x00\x00\x00\x00") == "Box"
+    assert m.decode_label(bytes(16)) == ""
+    assert m.decode_label(b"\xff" * 16) == ""  # erased EEPROM
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "label", "default"),
+    [
+        (9, "Scenario 10", True),
+        (30, "SCENARIO   031", True),
+        (0, "", True),
+        (2, "Scenario 7", False),  # a user name that happens to look default
+        (0, "Ins.Totale", False),
+        (4, "scenario 5", False),
+    ],
+)
+def test_is_factory_default_scenario(scenario_id: int, label: str, default: bool) -> None:
+    assert m.is_factory_default_scenario(scenario_id, label) is default
+
+
+def test_structure_decoders_reject_short_responses() -> None:
+    with pytest.raises(ValueError, match="short"):
+        m.decode_terminal_types(bytes(m._STATUS_HEADER), 0, 20)
+    with pytest.raises(ValueError, match="short"):
+        m.decode_configured_partitions(bytes(m._STATUS_HEADER + 3))
+
+
+def test_zone_candidates() -> None:
+    types = {0: 3, 1: 0, 2: 1, 3: 4, 4: 2, 1005: 1}
+    assert m.zone_candidates(types) == [0, 1005, 1]
 
 
 async def test_async_read_config_wrong_firmware(monkeypatch: pytest.MonkeyPatch) -> None:
