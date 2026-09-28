@@ -56,7 +56,31 @@ Zones are read only for the terminals that host a configured zone, in requests o
 
 When the native read sees a change, entities update immediately. An **area** change also arms a fast cgi poll to reconcile the rest; zone changes do not, so doors opening and closing never keep the cgi in its fast tier. The channel uses one persistent TCP connection (the panel accepts several concurrent 6004 clients, so PrimeStudio can still connect). While the native poll is healthy the cgi poll rests at **5 minutes** instead of the idle interval (areas, zones and scenario state are native; the cgi then only refreshes outputs, faults and diagnostics). A longer idle interval set in the options is kept. After an area change the usual fast cgi window still runs, then relaxes back to 5 minutes.
 
+Each status read has a 5 s ceiling (cold reads after the channel sat idle were measured at 3.4–4 s). If a read is still running when the next 2 s tick fires, that tick is skipped rather than queued behind it, so a slow panel never builds a backlog of native reads.
+
 Native failures never mark entities unavailable: after 3 consecutive failures the native poll backs off to every ~30 s, the cgi poll returns to the idle interval, and availability stays driven by the cgi poll. Disable it with **Fast area and zone polling (native protocol)** in the options.
+
+## Native structure (read once at setup)
+Before the first cgi poll, setup reads the panel's static structure over the same native channel (read-only; ~0.7 s on a PrimeX 4.07). The layouts follow [Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native):
+
+| Object | Exists when | Label from |
+|---|---|---|
+| Area | its *configured* bit is set in the partition status | partition label table |
+| Zone | its terminal is single-zone (zone *n*) or double-zone (zones *n* and *n + 1005*), and its partition bitmask in the zone settings is non-zero | zone label table |
+| Scenario | its label is not the factory default (`Scenario 10`, `SCENARIO   031`, …) | arming-scenario label table |
+| Output | panel output terminal 1005–1009 of the *output* type | output label table |
+
+Every cgi cycle still reads everything; the native structure is then applied, while live state keeps coming from the cgi and the native poll:
+
+- an object both report keeps the cgi state, with the native label;
+- an area or zone only the native structure lists is added only while **Fast area and zone polling** is on, since that poll is what keeps its state live. Until the first native tick (≤ 2 s) it shows a neutral state (disarmed, closed);
+- an area, zone or scenario only the cgi reports is **kept** as the cgi has it, so a security object is never hidden because of the native rules alone;
+- any difference between the cgi and native sets is logged as a warning once per kind (please report it);
+- outputs come from the native structure only: the cgi output list is known to be wrong. An output the cgi does not report has an unknown on/off state.
+
+If the structure read fails (for example on a panel variant that answers the terminal scan differently), setup continues with the cgi object list and names and logs a warning.
+
+Entity unique IDs are unchanged, so existing entities keep their history. The structure is not re-read while running: reload the integration after adding, removing or renaming objects on the panel.
 
 ## Recommended profiles
 | Goal | Idle | Active | Push |

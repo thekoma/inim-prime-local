@@ -120,6 +120,16 @@ def test_output_switch_state_mapping(fake_coordinator, entry):
     assert di["name"] == "INIM Prime"
 
 
+def test_output_switch_unknown_state(fake_coordinator, entry):
+    """An output only the native structure lists has no known on/off state."""
+    fake_coordinator.data.outputs.append(
+        Output(id=1007, label="Sirena Box", terminal=1007, state=None, type=0)
+    )
+    switch = InimOutputSwitch(fake_coordinator, entry, 1007)
+    assert switch.is_on is None
+    assert switch.name == "Sirena Box"
+
+
 def test_zone_bypass_switch(fake_coordinator, entry):
     not_bypassed = InimZoneBypassSwitch(fake_coordinator, entry, 1)
     bypassed = InimZoneBypassSwitch(fake_coordinator, entry, 2)

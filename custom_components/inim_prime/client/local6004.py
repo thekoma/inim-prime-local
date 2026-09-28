@@ -1,9 +1,11 @@
 """Read-only client for the INIM PrimeX local protocol (TCP 6004).
 
-This is a strictly READ-ONLY companion to the cgi HTTP client. The cgi already
-provides live state and entity names; what the local protocol adds is data the
-cgi cannot express:
+This is a strictly READ-ONLY companion to the cgi HTTP client. What the local
+protocol adds:
 
+* **static structure** — which partitions, zones, arming scenarios and outputs
+  exist, and their labels, read once at setup (see :class:`Local6004Structure`).
+  It also names the panel outputs correctly, which the cgi does not.
 * **multi-active scenes** — each arming scenario's per-partition target mode
   (``away``/``stay``/``disarm``); a scenario is "active" when every partition it
   targets currently matches that mode (computed against live cgi area state).
@@ -32,9 +34,16 @@ GPL-3.0): request ``[op:4 LE][pin:6]`` (``74 00..`` = no PIN), response
 Live terminal status (op 7, same source) takes ``[start:2 LE][end:2 LE]``
 (end exclusive, at most 20 terminals) and answers ``[header:18][10 bytes x 20]``.
 A record is ``[type][00][zone A: flags, 00, ZoneState, 00][zone B: ...]`` with
-type 0 = single zone, 3 = double zone; flags ``0x10`` = excluded (bypassed),
-``0x01`` = alarm memory. Zone ``n`` (< 1005) is half A of terminal ``n``; zone
-``n + 1005`` is half B of terminal ``n`` (verified against the cgi on a PrimeX).
+type 0 = single zone, 3 = double zone, 1 = output, 4 = disabled; flags
+``0x10`` = excluded (bypassed), ``0x01`` = alarm memory. Zone ``n`` (< 1005) is
+half A of terminal ``n``; zone ``n + 1005`` is half B of terminal ``n`` (verified
+against the cgi on a PrimeX).
+
+The static structure uses the label tables and the zone-settings layout also
+documented by Pitscheider's library: 16-byte ASCII label records per
+partition, zone (indexed by zone id), arming scenario and output (indexed by
+``terminal - 1005``), and 11-byte zone settings whose first 4 bytes are the
+uint32 LE partition bitmask.
 
 The EEPROM config offsets below are the **40x** layout (PrimeX firmware 4.x),
 which is a compile-time-constant memory map in the official client. They are
@@ -46,7 +55,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -78,11 +88,21 @@ _OP_TERMINAL_STATUS = 7
 _TERMINAL_REC = 10
 _TERMINAL_CHUNK = 20
 _TERMINAL_SINGLE = 0
+_TERMINAL_OUTPUT = 1
 _TERMINAL_DOUBLE = 3
 _ZONE_EXCLUDED = 0x10
 _ZONE_MEMORY = 0x01
 # Zone id of the second half (B) of terminal 0 on a double-zone terminal.
 SECOND_HALF_ZONE_OFFSET = 1005
+# Every terminal id: zone terminals 0..1004, then the panel outputs 1005..1009.
+_TERMINAL_COUNT = 1010
+_OUTPUT_TERMINALS = range(SECOND_HALF_ZONE_OFFSET, _TERMINAL_COUNT)
+# Per-command ceiling for the live status reads. Cold reads after the channel
+# sat idle were measured at 3.4-4 s, so 3 s timed out on a healthy panel.
+STATUS_TIMEOUT = 5.0
+# Ceiling for the one-off structure read at setup: three connections and ~60
+# round trips, each of which can be slow on a cold channel.
+STRUCTURE_TIMEOUT = 30.0
 
 _STATUS_OPS = frozenset({_OP_PARTITION_STATUS, _OP_TERMINAL_STATUS})
 
@@ -131,7 +151,16 @@ _SCENARIO_MODI_REC = 19
 _SCENARIO_COUNT = 50
 _ZONE_CFG_ADDR = 0x14073414
 _ZONE_CFG_REC = 11
-_ZONE_COUNT = 100
+_ZONE_MASK_LEN = 4
+_LABEL_REC = 16
+_AREA_LABELS_ADDR = 0x14030D20
+_ZONE_LABELS_ADDR = 0x14030F00
+_SCENARIO_LABELS_ADDR = 0x1403D8E0
+_OUTPUT_LABELS_ADDR = 0x1403DEB0
+
+# Factory-default scenario names carry their 1-based index: "Scenario 10" or
+# "SCENARIO   031". Unused scenarios keep them; the cgi does not list those.
+_FACTORY_SCENARIO_RE = re.compile(r"(?:Scenario|SCENARIO)\s+(\d+)")
 
 # Scenario MODO nibble bits -> live AreaMode they require.
 _MODE_BIT = {0x01: "away", 0x02: "stay", 0x04: "disarm"}
@@ -218,6 +247,74 @@ def terminal_chunks(terminals: set[int]) -> list[tuple[int, int]]:
         else:
             chunks.append((terminal, terminal + 1))
     return chunks
+
+
+def decode_label(rec: bytes) -> str:
+    """Decode a 16-byte label record (ASCII, space/NUL padded; 0xFF = erased)."""
+    return rec.split(b"\x00", 1)[0].replace(b"\xff", b"").decode("latin-1").strip()
+
+
+def _label_at(blob: bytes, index: int) -> str:
+    return decode_label(blob[index * _LABEL_REC : (index + 1) * _LABEL_REC])
+
+
+def is_factory_default_scenario(scenario_id: int, label: str) -> bool:
+    """Return True iff ``label`` is the untouched name of scenario ``scenario_id``.
+
+    Only a default that matches the scenario's own index counts, so a user
+    naming scenario 3 "Scenario 7" keeps it. An empty label also counts.
+    """
+    match = _FACTORY_SCENARIO_RE.fullmatch(label)
+    return not label or (match is not None and int(match.group(1)) == scenario_id + 1)
+
+
+def decode_terminal_types(resp: bytes, start: int, end: int) -> dict[int, int]:
+    """Decode a terminal-status response for ``[start, end)`` into ``{terminal: type}``."""
+    count = end - start
+    if len(resp) < _STATUS_HEADER + count * _TERMINAL_REC:
+        raise ValueError(f"short terminal-status response ({len(resp)} bytes)")
+    return {start + idx: resp[_STATUS_HEADER + idx * _TERMINAL_REC] for idx in range(count)}
+
+
+def decode_configured_partitions(resp: bytes) -> list[int]:
+    """Return the ids of partitions with the configured bit set."""
+    if len(resp) < _STATUS_HEADER + _PARTITION_REC * _PARTITION_COUNT:
+        raise ValueError(f"short partition-status response ({len(resp)} bytes)")
+    return [
+        area_id
+        for area_id in range(_PARTITION_COUNT)
+        if resp[_STATUS_HEADER + area_id * _PARTITION_REC + 2] & _PARTITION_CONFIGURED
+    ]
+
+
+def zone_candidates(terminal_types: dict[int, int]) -> list[int]:
+    """Return the zone ids the terminal types allow, in the cgi's order.
+
+    A single-zone terminal holds zone ``n`` (half A); a double-zone terminal
+    also holds ``n + 1005`` (half B). Outputs, disabled and unknown terminals
+    hold no zone. The order (terminal, then half) matches the cgi listing.
+    """
+    zones: list[int] = []
+    for terminal in sorted(t for t in terminal_types if t < SECOND_HALF_ZONE_OFFSET):
+        halves = {_TERMINAL_SINGLE: 1, _TERMINAL_DOUBLE: 2}.get(terminal_types[terminal], 0)
+        zones.extend(terminal + half * SECOND_HALF_ZONE_OFFSET for half in range(halves))
+    return zones
+
+
+def _half_spans(zone_ids: list[int]) -> list[tuple[int, int]]:
+    """Cover ``zone_ids`` with one ``[first, last]`` span per zone half.
+
+    Labels and settings are indexed by zone id, so two contiguous reads fetch
+    everything without reading the whole 2010-zone tables.
+    """
+    spans: list[tuple[int, int]] = []
+    for half in (
+        [z for z in zone_ids if z < SECOND_HALF_ZONE_OFFSET],
+        [z for z in zone_ids if z >= SECOND_HALF_ZONE_OFFSET],
+    ):
+        if half:
+            spans.append((min(half), max(half)))
+    return spans
 
 
 @dataclass(frozen=True)
@@ -331,6 +428,80 @@ class SceneDef:
 
 
 @dataclass(frozen=True)
+class NativeObject:
+    """A labelled panel object (partition, arming scenario or output)."""
+
+    id: int
+    label: str
+
+
+@dataclass(frozen=True)
+class NativeZoneDef:
+    """A zone that exists on the panel, with its label and partitions.
+
+    ``terminal`` is the physical terminal holding the zone (zone 1005 lives on
+    terminal 0); ``areas`` are the partition ids from the settings bitmask.
+    """
+
+    id: int
+    label: str
+    terminal: int
+    areas: tuple[int, ...]
+
+
+def _decode_zones(
+    candidates: list[int], spans: list[tuple[int, int]], blobs: list[bytes]
+) -> list[NativeZoneDef]:
+    """Build the zones that exist from the label/settings reads of each span.
+
+    ``blobs`` holds ``[labels, settings]`` per span, in span order. A candidate
+    zone with an empty partition bitmask is not in use and is dropped.
+    """
+    zones: list[NativeZoneDef] = []
+    for (first, last), labels, settings in zip(spans, blobs[0::2], blobs[1::2], strict=True):
+        for zid in candidates:
+            if not first <= zid <= last:
+                continue
+            idx = zid - first
+            off = idx * _ZONE_CFG_REC
+            mask = int.from_bytes(settings[off : off + _ZONE_MASK_LEN], "little")
+            areas = tuple(b for b in range(_PARTITION_COUNT) if mask & (1 << b))
+            if areas:
+                zones.append(
+                    NativeZoneDef(
+                        id=zid,
+                        label=_label_at(labels, idx),
+                        terminal=zone_terminal(zid)[0],
+                        areas=areas,
+                    )
+                )
+    # Back to the cgi's order (terminal, then half).
+    order = {zid: pos for pos, zid in enumerate(candidates)}
+    return sorted(zones, key=lambda z: order[z.id])
+
+
+@dataclass(frozen=True)
+class Local6004Structure:
+    """Which objects exist on the panel, and their labels (read once, natively).
+
+    * areas: partitions with the configured bit set in the partition status;
+    * zones: zones whose terminal is single (half A) or double (halves A and
+      B) and whose partition bitmask is non-zero;
+    * scenarios: arming scenarios whose label is not the factory default;
+    * outputs: panel output terminals (1005..1009) of the output type, keyed
+      by terminal id, which is also the id the cgi uses.
+
+    On a live PrimeX 4.07 this reproduces the cgi's area, zone and scenario
+    sets and labels exactly.
+    """
+
+    areas: list[NativeObject] = field(default_factory=list)
+    zones: list[NativeZoneDef] = field(default_factory=list)
+    scenarios: list[NativeObject] = field(default_factory=list)
+    outputs: list[NativeObject] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class Local6004Config:
     """Static config read once from the panel over TCP 6004 (read-only)."""
 
@@ -338,6 +509,9 @@ class Local6004Config:
     layout_ok: bool  # offsets valid (firmware major == 4 / 40x layout)
     scenes: list[SceneDef] = field(default_factory=list)
     zone_areas: dict[int, list[int]] = field(default_factory=dict)
+    # None when it could not be read (unsupported layout, or the structure
+    # read failed): the cgi structure is then used as is.
+    structure: Local6004Structure | None = None
 
 
 def scene_is_active(arms: dict[int, str], areas_by_id: dict[int, AreaMode]) -> bool:
@@ -409,7 +583,9 @@ class Local6004Client:
         self._status_conn: tuple[asyncio.StreamReader, asyncio.StreamWriter] | None = None
         self._status_lock = asyncio.Lock()
 
-    async def async_get_area_statuses(self, timeout: float = 3.0) -> dict[int, NativeAreaStatus]:
+    async def async_get_area_statuses(
+        self, timeout: float = STATUS_TIMEOUT
+    ) -> dict[int, NativeAreaStatus]:
         """Return live partition statuses over a persistent connection (read-only)."""
         async with self._status_lock:
             try:
@@ -422,7 +598,7 @@ class Local6004Client:
         return decode_partition_statuses(await self._status(_status_cmd(_OP_PARTITION_STATUS)))
 
     async def async_get_zone_statuses(
-        self, zone_ids: set[int], timeout: float = 3.0
+        self, zone_ids: set[int], timeout: float = STATUS_TIMEOUT
     ) -> dict[int, NativeZoneStatus]:
         """Return live statuses for ``zone_ids`` over the persistent connection."""
         async with self._status_lock:
@@ -464,11 +640,28 @@ class Local6004Client:
             pass
 
     async def async_read_config(self) -> Local6004Config:
-        """Connect, read the static config (read-only), and disconnect."""
+        """Connect, read the static config (read-only), and disconnect.
+
+        The firmware and scenario definitions are required: a failure raises
+        :class:`Local6004Error`. The structure is best effort: its read covers
+        the whole terminal range, verified on one firmware only, so a failure
+        leaves ``structure`` None and the caller keeps the cgi structure.
+        """
         try:
-            return await asyncio.wait_for(self._read_config(), self._timeout)
-        except (TimeoutError, OSError, ValueError) as err:
-            raise Local6004Error(str(err)) from err
+            config = await asyncio.wait_for(self._read_config(), self._timeout)
+        except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as err:
+            raise Local6004Error(str(err) or type(err).__name__) from err
+        if not config.layout_ok:
+            return config
+        try:
+            structure = await asyncio.wait_for(self._read_structure(), STRUCTURE_TIMEOUT)
+        except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError):
+            return config
+        return replace(
+            config,
+            zone_areas={z.id: list(z.areas) for z in structure.zones},
+            structure=structure,
+        )
 
     async def async_read_event_log(
         self,
@@ -494,12 +687,8 @@ class Local6004Client:
         if not layout_ok:
             return Local6004Config(firmware=firmware, layout_ok=False)
 
-        modi, zcfg = await self._session(
-            _OPEN_CFG,
-            [
-                (_SCENARIO_MODI_ADDR, _SCENARIO_MODI_REC * _SCENARIO_COUNT),
-                (_ZONE_CFG_ADDR, _ZONE_CFG_REC * _ZONE_COUNT),
-            ],
+        (modi,) = await self._session(
+            _OPEN_CFG, [(_SCENARIO_MODI_ADDR, _SCENARIO_MODI_REC * _SCENARIO_COUNT)]
         )
         scenes = []
         for sid in range(_SCENARIO_COUNT):
@@ -507,17 +696,79 @@ class Local6004Client:
             arms = decode_scene(rec)
             if arms:  # skip undefined scenarios
                 scenes.append(SceneDef(id=sid, arms=arms))
-        zone_areas: dict[int, list[int]] = {}
-        for zid in range(_ZONE_COUNT):
-            off = zid * _ZONE_CFG_REC
-            if off < len(zcfg):
-                mask = zcfg[off]
-                areas = [b for b in range(8) if mask & (1 << b)]
-                if areas:
-                    zone_areas[zid] = areas
-        return Local6004Config(
-            firmware=firmware, layout_ok=True, scenes=scenes, zone_areas=zone_areas
+        return Local6004Config(firmware=firmware, layout_ok=True, scenes=scenes)
+
+    async def _read_structure(self) -> Local6004Structure:
+        """Read which objects exist and their labels (see :class:`Local6004Structure`)."""
+        area_ids, terminal_types = await self._scan_terminals()
+        candidates = zone_candidates(terminal_types)
+        spans = _half_spans(candidates)
+        reads = [
+            (_AREA_LABELS_ADDR, _LABEL_REC * _PARTITION_COUNT),
+            (_SCENARIO_LABELS_ADDR, _LABEL_REC * _SCENARIO_COUNT),
+            (_OUTPUT_LABELS_ADDR, _LABEL_REC * len(_OUTPUT_TERMINALS)),
+        ]
+        for first, last in spans:
+            count = last - first + 1
+            reads.append((_ZONE_LABELS_ADDR + first * _LABEL_REC, count * _LABEL_REC))
+            reads.append((_ZONE_CFG_ADDR + first * _ZONE_CFG_REC, count * _ZONE_CFG_REC))
+        area_labels, scenario_labels, output_labels, *zone_blobs = await self._session(
+            _OPEN_CFG, reads
         )
+
+        scenarios = [
+            NativeObject(id=sid, label=_label_at(scenario_labels, sid))
+            for sid in range(_SCENARIO_COUNT)
+        ]
+        return Local6004Structure(
+            areas=[NativeObject(id=a, label=_label_at(area_labels, a)) for a in area_ids],
+            zones=_decode_zones(candidates, spans, zone_blobs),
+            scenarios=[s for s in scenarios if not is_factory_default_scenario(s.id, s.label)],
+            outputs=[
+                NativeObject(id=t, label=_label_at(output_labels, t - _OUTPUT_TERMINALS.start))
+                for t in _OUTPUT_TERMINALS
+                if terminal_types.get(t) == _TERMINAL_OUTPUT
+            ],
+        )
+
+    async def _scan_terminals(self) -> tuple[list[int], dict[int, int]]:
+        """Return the configured partitions and every terminal's type.
+
+        Uses the read-only status commands on their own connection (they take
+        no context op): one partition status, then all terminals in chunks.
+        """
+        chunks = [
+            (start, min(start + _TERMINAL_CHUNK, _TERMINAL_COUNT))
+            for start in range(0, _TERMINAL_COUNT, _TERMINAL_CHUNK)
+        ]
+        commands = [(_OP_PARTITION_STATUS, b"")] + [
+            (_OP_TERMINAL_STATUS, s.to_bytes(2, "little") + e.to_bytes(2, "little"))
+            for s, e in chunks
+        ]
+        partition_resp, *terminal_resps = await self._command_session(commands)
+        terminal_types: dict[int, int] = {}
+        for (start, end), resp in zip(chunks, terminal_resps, strict=True):
+            terminal_types |= decode_terminal_types(resp, start, end)
+        return decode_configured_partitions(partition_resp), terminal_types
+
+    async def _command_session(self, commands: list[tuple[int, bytes]]) -> list[bytes]:
+        """Open one connection, send ``(op, data)`` status commands, return responses.
+
+        Every body goes through :func:`_status_cmd`, so only the read-only
+        status opcodes can be sent.
+        """
+        reader, writer = await asyncio.open_connection(self._host, self._port)
+        try:
+            return [
+                await self._xfer(reader, writer, _status_cmd(op, data), first=True)
+                for op, data in commands
+            ]
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
 
     async def _session(self, open_payload: bytes, reads: list[tuple[int, int]]) -> list[bytes]:
         """Open one connection, send the context op, perform reads, return data."""

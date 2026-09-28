@@ -28,6 +28,7 @@ from .client import (
     Local6004Client,
     Local6004Config,
     Local6004Error,
+    Local6004Structure,
     NativeAreaStatus,
     NativeZoneStatus,
     Output,
@@ -39,10 +40,12 @@ from .client import (
 )
 from .const import (
     API_STATS_REFRESH_INTERVAL,
+    CONF_NATIVE_AREA_POLL,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     DEFAULT_ACTIVE_WINDOW,
     DEFAULT_CYCLE_TIMEOUT,
+    DEFAULT_NATIVE_AREA_POLL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     DEFAULT_SCAN_INTERVAL_IDLE,
@@ -168,6 +171,11 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         self._native_areas: dict[int, NativeAreaStatus] = {}
         self._native_zones: dict[int, NativeZoneStatus] = {}
         self._native_at: float | None = None
+        # Set while a native poll runs: a tick that fires meanwhile is skipped
+        # rather than queued behind the status lock.
+        self._native_polling = False
+        # Object kinds whose cgi and native sets differed (warned once each).
+        self._structure_warned: set[str] = set()
 
         super().__init__(
             hass,
@@ -284,15 +292,140 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
                 self._api_stats = None
         api_stats = self._api_stats
 
-        return InimData(
-            version=self._version,
-            areas=areas,
-            zones=zones,
-            scenarios=scenarios,
-            outputs=outputs,
-            fault=fault,
-            api_stats=api_stats,
+        return self._apply_structure(
+            InimData(
+                version=self._version,
+                areas=areas,
+                zones=zones,
+                scenarios=scenarios,
+                outputs=outputs,
+                fault=fault,
+                api_stats=api_stats,
+            )
         )
+
+    # ------------------------------------------------------------------
+    # Native structure: which objects exist, and their labels
+    # ------------------------------------------------------------------
+    def _apply_structure(self, data: InimData) -> InimData:
+        """Overlay the native structure (read once at setup) on a cgi snapshot.
+
+        The cgi cycle still reads everything; this step then applies the
+        native labels and object sets, in the native order:
+
+        * an object both report keeps its cgi state, with the native label;
+        * an area or zone only the native structure lists is added when the
+          native poll is enabled (it keeps that state live), starting from the
+          last native status reading or a neutral state (disarmed/ready,
+          closed) until the first tick. With the poll off nothing would ever
+          update it, so it is left out;
+        * an area, zone or scenario only the cgi reports is kept as the cgi
+          has it: a security object is never hidden on the strength of the
+          native existence rules alone. Both cases are logged once per kind;
+        * outputs come from the native structure only, which fixes the cgi's
+          output list (two outputs, named after zones). An output the cgi does
+          not report has an unknown state.
+
+        Without a native structure (not read) the cgi snapshot is returned
+        unchanged.
+        """
+        structure = self.local_config.structure if self.local_config is not None else None
+        if structure is None:
+            return data
+        self._warn_structure_mismatch(data, structure)
+        native_poll = bool(
+            self.config_entry.options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL)
+        )
+
+        cgi_areas = {area.id: area for area in data.areas}
+        areas: list[Area] = []
+        for obj in structure.areas:
+            area = cgi_areas.pop(obj.id, None)
+            if area is not None:
+                areas.append(replace(area, label=obj.label))
+            elif native_poll:
+                native = self._native_areas.get(obj.id)
+                areas.append(
+                    Area(
+                        id=obj.id,
+                        label=obj.label,
+                        mode=native.mode if native is not None else AreaMode.DISARMED,
+                        state=(
+                            AreaState.ALARM
+                            if native is not None and native.alarm
+                            else AreaState.READY
+                        ),
+                        alarm_memory=native is not None and native.alarm_memory,
+                    )
+                )
+        areas.extend(cgi_areas.values())
+
+        cgi_zones = {zone.id: zone for zone in data.zones}
+        zones: list[Zone] = []
+        for zdef in structure.zones:
+            zone = cgi_zones.pop(zdef.id, None)
+            if zone is not None:
+                zones.append(replace(zone, label=zdef.label))
+            elif native_poll:
+                live = self._native_zones.get(zdef.id)
+                zones.append(
+                    Zone(
+                        id=zdef.id,
+                        label=zdef.label,
+                        # The cgi reports a zone's own id as its terminal.
+                        terminal=zdef.id,
+                        state=live.state if live is not None else ZoneState.READY,
+                        alarm_memory=live is not None and live.alarm_memory,
+                        excluded=live is not None and live.excluded,
+                    )
+                )
+        zones.extend(cgi_zones.values())
+
+        cgi_scenarios = {scenario.id: scenario for scenario in data.scenarios}
+        scenarios = [
+            replace(cgi_scenarios.pop(obj.id), label=obj.label)
+            if obj.id in cgi_scenarios
+            else Scenario(id=obj.id, label=obj.label, active=False)
+            for obj in structure.scenarios
+        ]
+        scenarios.extend(cgi_scenarios.values())
+
+        cgi_outputs = {output.id: output for output in data.outputs}
+        outputs = [
+            replace(cgi_outputs[obj.id], label=obj.label)
+            if obj.id in cgi_outputs
+            else Output(id=obj.id, label=obj.label, terminal=obj.id, state=None, type=0)
+            for obj in structure.outputs
+        ]
+
+        return replace(data, areas=areas, zones=zones, scenarios=scenarios, outputs=outputs)
+
+    def _warn_structure_mismatch(self, data: InimData, structure: Local6004Structure) -> None:
+        """Log once per kind when the cgi and native object sets differ.
+
+        They match on the panels verified so far; a difference means the native
+        existence rules miss a case and is worth a bug report. Outputs are not
+        compared: the cgi output list is known to be wrong.
+        """
+        for kind, cgi_ids, native_ids in (
+            ("areas", {a.id for a in data.areas}, {a.id for a in structure.areas}),
+            ("zones", {z.id for z in data.zones}, {z.id for z in structure.zones}),
+            (
+                "scenarios",
+                {s.id for s in data.scenarios},
+                {s.id for s in structure.scenarios},
+            ),
+        ):
+            if cgi_ids == native_ids or kind in self._structure_warned:
+                continue
+            self._structure_warned.add(kind)
+            LOGGER.warning(
+                "Native panel structure differs from the cgi for %s: only cgi %s, only native %s."
+                " Keeping both; please report this",
+                kind,
+                sorted(cgi_ids - native_ids),
+                sorted(native_ids - cgi_ids),
+            )
 
     @callback
     def _note_failure(self) -> None:
@@ -412,15 +545,27 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         """
         if self.native_client is None or self.data is None:
             return
+        # The interval timer starts a new task every tick even while the last
+        # read is still waiting on a slow panel; skip instead of piling up.
+        if self._native_polling:
+            return
         if self._native_skip > 0:
             self._native_skip -= 1
             return
+        self._native_polling = True
+        try:
+            await self._native_poll(self.native_client)
+        finally:
+            self._native_polling = False
+
+    async def _native_poll(self, native_client: Local6004Client) -> None:
+        """Run one native read and apply it (see :meth:`async_native_poll`)."""
         zone_ids = {zone.id for zone in self.data.zones}
         read_at = time.monotonic()
         try:
-            statuses = await self.native_client.async_get_area_statuses()
+            statuses = await native_client.async_get_area_statuses()
             zone_statuses = (
-                await self.native_client.async_get_zone_statuses(zone_ids) if zone_ids else {}
+                await native_client.async_get_zone_statuses(zone_ids) if zone_ids else {}
             )
         except Local6004Error as err:
             self._native_failures += 1

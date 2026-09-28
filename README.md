@@ -25,12 +25,14 @@ A **local, offline-first** Home Assistant integration for **INIM Prime / PrimeX*
 | 🎬 **Scenarios** | `select` + per-scenario `binary_sensor` *(disabled by default)* | Apply any arming scenario. *Use the area `alarm_control_panel` for the actual arm state — the panel only reports a scenario as "active" for the system-wide Total macro ([details](docs/known-limitations.md)).* |
 | 🚪 **Zones** | `binary_sensor` (one per zone) | Open / closed in realtime; device class (and so the icon) guessed from the zone name in **12 languages** — window, door, garage, motion, smoke, gas, CO, water, vibration, tamper |
 | 🚫 **Zone bypass** | `switch` (one per zone) | Include / exclude a zone from arming |
-| ⚡ **Outputs** | `switch` (one per output) | Toggle panel outputs *(needs the panel "Code" enabled — hidden by default)* |
+| ⚡ **Outputs** | `switch` (one per panel output) | Toggle panel outputs, named as programmed on the panel *(needs the panel "Code" enabled — hidden by default)* |
 | 🔋 **Power & faults** | `sensor` + `binary_sensor` | Supply voltage, open-zone count, system fault + a per-fault breakdown |
 | 🧹 **Alarm memory** | `button` (one per area) | Clear alarm memory; per-area alarm-memory sensors |
 | 🩺 **Diagnostics** | `sensor` | API connection count, last API client, panel/firmware info |
 
 Unused **factory-default areas** (`AREA 006…`), the **output switches**, and the **per-scenario "active" sensors** are hidden by default so your entity list stays clean — re-enable any you actually use.
+
+**Which** areas, zones, scenarios and outputs exist, and their names, are read once at setup over the panel's native read-only TCP 6004 protocol, not from the cgi. On a PrimeX 4.07 this gives exactly the cgi's areas, zones and scenarios, and fixes the outputs: the cgi lists only two of them, named after zones (see [known limitations](docs/known-limitations.md)). Reload the integration after changing the panel programming.
 
 ## Why local?
 
@@ -188,7 +190,7 @@ This project is local-first and specific to INIM **Prime / PrimeX** over the on-
 
 - **[pla10/homeassistant_inim_alarm](https://github.com/pla10/homeassistant_inim_alarm)** — the most established INIM integration. Cloud-based (INIM Cloud) with WebSocket push and an optional local SIA-IP listener; covers SmartLiving and Prime. Choose it for broad panel coverage if a cloud dependency is acceptable.
 - **[Pitscheider/ha_inim_prime](https://github.com/Pitscheider/ha_inim_prime)** — a local Prime integration over the PrimeLAN Web API with rich fault/GSM diagnostics and four arm modes.
-- **[Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native)** (GPL-3.0) — a Python library for the panel's native TCP 6004 protocol. This integration's fast area-state path (partition status command) follows the command layout documented there.
+- **[Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native)** (GPL-3.0) — a Python library for the panel's native TCP 6004 protocol. This integration's fast area and zone state path (partition and terminal status commands) and its native structure read (label tables, zone settings) follow the layouts documented there.
 - **[matteoraf/ha-inim_smartliving_alarm_panel](https://github.com/matteoraf/ha-inim_smartliving_alarm_panel)** — fully local integration for **SmartLiving** panels over the native TCP protocol.
 - **[nidble/pyinim](https://github.com/nidble/pyinim)** — a reusable async Python library for the INIM cloud API.
 
