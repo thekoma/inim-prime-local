@@ -26,9 +26,17 @@ No. Polling is fully async (the event loop is free during network waits), payloa
 
 ## Safety guards (so HA never suffers)
 - **Per-request timeout** 5 s (+ 3 s connect) — an unreachable panel fails fast.
-- **Per-cycle hard timeout** 8 s — a stuck cycle becomes an `UpdateFailed` (entities go *unavailable*), it never hangs.
+- **Per-cycle hard timeout** 20 s — a stuck cycle is aborted, it never hangs.
+- **Transient-failure tolerance** — a failed or timed-out cycle keeps the last good snapshot; entities only go *unavailable* after 3 consecutive failed cycles. A single slow cycle therefore no longer flaps every entity to `unavailable` (which made state-change automations miss arm/disarm events).
 - **No overlap / no pile-up** — at most one cycle is ever in flight; a refresh that fires mid-cycle reuses the cached snapshot instead of queueing.
 - **Failure backoff** — after repeated failures the interval relaxes to idle, so a dead/slow panel is not hammered; it recovers on the next success.
+- **Diagnostic reads are throttled** — the API-stats read (`get_status_api`) is refreshed every 10 minutes instead of every cycle.
+
+## When the panel is slow
+Not every panel matches the numbers above. One PrimeX in the field answered even `ping` in ~0.4 s (spikes to ~3 s), so a full cycle took ~7 s. If you see *"panel did not respond"* errors:
+- keep the idle interval at the 30 s default (or higher) so the panel is not saturated;
+- consider push ([realtime.md](realtime.md)) so arm/disarm events do not depend on polling;
+- check the panel's network link (cable, switch port, LAN module) — high ICMP latency to the panel points there.
 
 ## Recommended profiles
 | Goal | Idle | Active | Push |

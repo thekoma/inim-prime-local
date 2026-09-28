@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -34,6 +35,7 @@ from .client import (
     scene_is_active,
 )
 from .const import (
+    API_STATS_REFRESH_INTERVAL,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     DEFAULT_ACTIVE_WINDOW,
@@ -52,6 +54,7 @@ from .const import (
     EV_ZONE_CLOSE,
     EV_ZONE_OPEN,
     FAILURES_BEFORE_BACKOFF,
+    FAILURES_BEFORE_UNAVAILABLE,
     LOGGER,
 )
 
@@ -142,6 +145,12 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         self._consecutive_failures = 0
         self._backed_off = False
 
+        # The diagnostic api-stats read is refreshed at most every
+        # API_STATS_REFRESH_INTERVAL seconds; between refreshes the cached value
+        # is reused so each cycle costs one cgi read less.
+        self._api_stats: ApiStats | None = None
+        self._api_stats_at: float | None = None
+
         super().__init__(
             hass,
             LOGGER,
@@ -164,6 +173,12 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
           run away; on timeout we raise ``UpdateFailed`` (entities go
           unavailable, coordinator backs off) rather than hang.
 
+        A failed cycle does not immediately mark entities unavailable: while we
+        have a cached snapshot, up to ``FAILURES_BEFORE_UNAVAILABLE - 1``
+        consecutive failures are absorbed by serving that snapshot. A loaded
+        panel occasionally misses a cycle, and flapping every entity to
+        ``unavailable`` for that makes state-change automations miss events.
+
         After ``FAILURES_BEFORE_BACKOFF`` consecutive failed cycles we relax to
         the idle tier and stop fast polling. The counter resets on success.
         """
@@ -177,31 +192,48 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
                 async with asyncio.timeout(DEFAULT_CYCLE_TIMEOUT):
                     data = await self._fetch_cycle()
             except InimApiError as err:
-                self._note_failure()
                 # An API-key rejection is not a transient failure: surface it as
                 # ConfigEntryAuthFailed so Home Assistant starts the reauth flow
                 # to let the user re-enter the key.
                 if err.status == ApiStatus.ERROR_APIKEY:
+                    self._note_failure()
                     raise ConfigEntryAuthFailed(str(err)) from err
-                raise UpdateFailed(str(err)) from err
+                return self._handle_failure(str(err), err)
             except InimConnectionError as err:
-                self._note_failure()
-                raise UpdateFailed(str(err)) from err
+                return self._handle_failure(str(err), err)
             except TimeoutError as err:
-                self._note_failure()
-                raise UpdateFailed(
-                    f"panel did not respond within {DEFAULT_CYCLE_TIMEOUT}s"
-                ) from err
+                return self._handle_failure(
+                    f"panel did not respond within {DEFAULT_CYCLE_TIMEOUT}s", err
+                )
 
             self._note_success()
             return data
+
+    def _handle_failure(self, message: str, err: Exception) -> InimData:
+        """Absorb a transient failed cycle, or raise once it is persistent.
+
+        Returns the last good snapshot while the consecutive-failure count is
+        below ``FAILURES_BEFORE_UNAVAILABLE``; otherwise (or with no snapshot
+        yet) raises ``UpdateFailed`` so entities go unavailable.
+        """
+        self._note_failure()
+        if self.data is not None and self._consecutive_failures < FAILURES_BEFORE_UNAVAILABLE:
+            LOGGER.debug(
+                "Update cycle failed (%d/%d), keeping last snapshot: %s",
+                self._consecutive_failures,
+                FAILURES_BEFORE_UNAVAILABLE,
+                message,
+            )
+            return self.data
+        raise UpdateFailed(message) from err
 
     async def _fetch_cycle(self) -> InimData:
         """Issue the sequential cgi reads that make up one update cycle.
 
         The cgi endpoint is single-threaded, so reads are issued sequentially.
         The optional ``api_stats`` read degrades to ``None`` instead of failing
-        the whole update.
+        the whole update, and is only re-read every
+        ``API_STATS_REFRESH_INTERVAL`` seconds.
         """
         if self._version is None:
             self._version = await self.client.version()
@@ -212,11 +244,15 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         outputs = await self.client.get_outputs()
         fault = await self.client.get_faults()
 
-        api_stats: ApiStats | None
-        try:
-            api_stats = await self.client.get_api_stats()
-        except (InimConnectionError, InimApiError):
-            api_stats = None
+        now = time.monotonic()
+        if self._api_stats_at is None or now - self._api_stats_at >= API_STATS_REFRESH_INTERVAL:
+            try:
+                self._api_stats = await self.client.get_api_stats()
+                self._api_stats_at = now
+            except (InimConnectionError, InimApiError):
+                # Retry on the next cycle rather than waiting a full interval.
+                self._api_stats = None
+        api_stats = self._api_stats
 
         return InimData(
             version=self._version,
