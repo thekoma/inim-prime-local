@@ -56,6 +56,18 @@ LABEL_LANGUAGE_AUTO: Final = "auto"
 CONF_GROUP_BY_ROOM: Final = "group_by_room"
 DEFAULT_GROUP_BY_ROOM: Final = True
 
+# Fast area-state polling over the native TCP 6004 status command (~10 ms per
+# read, vs seconds for the cgi on a loaded panel). The cgi poll stays on as
+# the full-state reconciliation path.
+CONF_NATIVE_AREA_POLL: Final = "native_area_poll"
+DEFAULT_NATIVE_AREA_POLL: Final = True
+# Seconds between native area-status reads.
+NATIVE_AREA_POLL_INTERVAL: Final = 2
+# After this many consecutive native failures, only retry every
+# NATIVE_AREA_BACKOFF_TICKS ticks so a dead channel is not hammered.
+NATIVE_AREA_FAILURES_BEFORE_BACKOFF: Final = 3
+NATIVE_AREA_BACKOFF_TICKS: Final = 15
+
 # Read-only local protocol (TCP 6004) — MANDATORY. Reads the static scenario
 # definitions (for accurate multi-active scene sensors the cgi cannot express),
 # zone->area, and the precise panel model. The password is the panel LAN password

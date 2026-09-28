@@ -5,7 +5,7 @@
 <h1 align="center">INIM Prime — local Home Assistant integration</h1>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg"></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/License-GPL--3.0-blue.svg"></a>
   <a href="https://github.com/thekoma/inim-prime-local/actions/workflows/validate.yml"><img alt="Validate" src="https://github.com/thekoma/inim-prime-local/actions/workflows/validate.yml/badge.svg"></a>
   <a href="https://github.com/hacs/integration"><img alt="HACS Custom" src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg"></a>
   <img alt="Versioning: CalVer" src="https://img.shields.io/badge/versioning-CalVer-blue.svg">
@@ -78,6 +78,7 @@ Open **Configure** on the integration to tune how it reads the panel.
 | **Enable realtime push** | off | Register a local webhook for instant updates (see below) |
 | **Zone label language** | Auto | Language used to guess each zone's icon (and room) from its name (window/door/garage/motion/smoke/…). *Auto* follows Home Assistant's language; 12 languages are supported. |
 | **Group zones by room** | on | Place each zone under a per-room device (Camera, Bagno, Garage…) guessed from its name, so you can assign whole rooms to HA areas. |
+| **Fast area polling (native protocol)** | on | Read every area's arm/disarm state every 2 s over the panel's native TCP 6004 protocol (read-only, ~10 ms per read), so arm/disarm shows up within ~2 s without push. The cgi poll keeps running for everything else. |
 
 ### How fast can it go? (measured on a real PrimeX 4.07)
 
@@ -187,8 +188,13 @@ This project is local-first and specific to INIM **Prime / PrimeX** over the on-
 
 - **[pla10/homeassistant_inim_alarm](https://github.com/pla10/homeassistant_inim_alarm)** — the most established INIM integration. Cloud-based (INIM Cloud) with WebSocket push and an optional local SIA-IP listener; covers SmartLiving and Prime. Choose it for broad panel coverage if a cloud dependency is acceptable.
 - **[Pitscheider/ha_inim_prime](https://github.com/Pitscheider/ha_inim_prime)** — a local Prime integration over the PrimeLAN Web API with rich fault/GSM diagnostics and four arm modes.
+- **[Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native)** (GPL-3.0) — a Python library for the panel's native TCP 6004 protocol. This integration's fast area-state path (partition status command) follows the command layout documented there.
 - **[matteoraf/ha-inim_smartliving_alarm_panel](https://github.com/matteoraf/ha-inim_smartliving_alarm_panel)** — fully local integration for **SmartLiving** panels over the native TCP protocol.
 - **[nidble/pyinim](https://github.com/nidble/pyinim)** — a reusable async Python library for the INIM cloud API.
+
+## License
+
+GPL-3.0 — see [LICENSE](LICENSE). Releases up to 2026.9.0 were published under the MIT license.
 
 ## Disclaimer
 

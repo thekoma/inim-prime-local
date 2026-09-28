@@ -178,10 +178,18 @@ def mock_local_config() -> Local6004Config:
 
 
 @pytest.fixture
-def patch_client(mock_client: AsyncMock, mock_local_config: Local6004Config):
-    """Patch the cgi client AND the mandatory 6004 client in __init__/config_flow."""
+def mock_local_client(mock_local_config: Local6004Config) -> AsyncMock:
+    """Return a stubbed Local6004Client (native area poll reports no areas)."""
     local = AsyncMock()
     local.async_read_config.return_value = mock_local_config
+    local.async_get_area_statuses.return_value = {}
+    return local
+
+
+@pytest.fixture
+def patch_client(mock_client: AsyncMock, mock_local_client: AsyncMock):
+    """Patch the cgi client AND the mandatory 6004 client in __init__/config_flow."""
+    local = mock_local_client
     with (
         patch(
             "custom_components.inim_prime.InimPrimeClient",

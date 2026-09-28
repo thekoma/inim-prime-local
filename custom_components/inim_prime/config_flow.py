@@ -39,6 +39,7 @@ from .const import (
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
+    CONF_NATIVE_AREA_POLL,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
@@ -47,6 +48,7 @@ from .const import (
     DEFAULT_GROUP_BY_ROOM,
     DEFAULT_LOCAL_PASSWORD,
     DEFAULT_NAME,
+    DEFAULT_NATIVE_AREA_POLL,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     DEFAULT_SCAN_INTERVAL_IDLE,
@@ -302,6 +304,10 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                     vol.Required(
                         CONF_GROUP_BY_ROOM,
                         default=options.get(CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM),
+                    ): bool,
+                    vol.Required(
+                        CONF_NATIVE_AREA_POLL,
+                        default=options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL),
                     ): bool,
                 }
             ),
