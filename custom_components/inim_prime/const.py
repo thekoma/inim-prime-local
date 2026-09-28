@@ -82,11 +82,19 @@ DEFAULT_ACTIVE_WINDOW: Final = 20
 # several sequential reads, so this is well under DEFAULT_CYCLE_TIMEOUT).
 DEFAULT_REQUEST_TIMEOUT: Final = 5
 # Hard ceiling for an entire update cycle; a cycle that exceeds this is aborted
-# and reported as UpdateFailed so it can never run away or pile up.
-DEFAULT_CYCLE_TIMEOUT: Final = 8
+# and reported as UpdateFailed so it can never run away or pile up. Real panels
+# can take ~1 s per read under load (~7 s per cycle), so leave generous headroom.
+DEFAULT_CYCLE_TIMEOUT: Final = 20
 # Consecutive failed cycles after which fast polling is suspended and the
 # coordinator backs off to the idle tier.
 FAILURES_BEFORE_BACKOFF: Final = 3
+# Consecutive failed cycles tolerated (serving the last good snapshot) before
+# entities are marked unavailable. A single slow/timed-out cycle is common on a
+# loaded panel and must not flap every entity to ``unavailable``.
+FAILURES_BEFORE_UNAVAILABLE: Final = 3
+# How often (seconds) the diagnostic ``get_status_api`` read is refreshed. Its
+# values barely change, so it is not worth one extra cgi read every cycle.
+API_STATS_REFRESH_INTERVAL: Final = 600
 
 # Panel event names carried in the webhook query/body (see design doc §2.3).
 EV_ZONE_OPEN: Final = "zone_open"

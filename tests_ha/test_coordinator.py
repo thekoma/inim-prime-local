@@ -14,8 +14,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.inim_prime.client import ApiStatus, InimApiError, InimConnectionError
 from custom_components.inim_prime.const import (
+    API_STATS_REFRESH_INTERVAL,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     FAILURES_BEFORE_BACKOFF,
+    FAILURES_BEFORE_UNAVAILABLE,
 )
 from custom_components.inim_prime.coordinator import (
     InimData,
@@ -288,3 +290,131 @@ async def test_backoff_relaxes_to_idle_then_recovers(
     coordinator.activate_fast_poll()
     assert coordinator.update_interval == timedelta(seconds=DEFAULT_SCAN_INTERVAL_ACTIVE)
     coordinator.async_cancel_decay()
+
+
+# ---------------------------------------------------------------------------
+# Transient-failure tolerance: serve the last snapshot before going unavailable
+# ---------------------------------------------------------------------------
+async def _seeded_coordinator(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> tuple[InimDataUpdateCoordinator, InimData]:
+    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
+    seed = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(seed)
+    return coordinator, seed
+
+
+async def test_transient_failures_serve_cached_snapshot_then_raise(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """Failures below the threshold return the cached snapshot; then raise."""
+    coordinator, seed = await _seeded_coordinator(hass, mock_config_entry, mock_client)
+    mock_client.get_areas.side_effect = InimConnectionError("slow")
+
+    for _ in range(FAILURES_BEFORE_UNAVAILABLE - 1):
+        assert await coordinator._async_update_data() is seed
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    # Recovery resets the counter, so the next failure is absorbed again.
+    mock_client.get_areas.side_effect = None
+    fresh = await coordinator._async_update_data()
+    coordinator.async_set_updated_data(fresh)
+    assert coordinator._consecutive_failures == 0
+    mock_client.get_areas.side_effect = InimConnectionError("slow")
+    assert await coordinator._async_update_data() is fresh
+
+
+async def test_transient_timeout_serves_cached_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A single cycle timeout with a cached snapshot does not raise."""
+    import custom_components.inim_prime.coordinator as coord_mod
+
+    coordinator, seed = await _seeded_coordinator(hass, mock_config_entry, mock_client)
+    monkeypatch.setattr(coord_mod, "DEFAULT_CYCLE_TIMEOUT", 0.2)
+
+    async def _slow_get_areas() -> None:
+        await asyncio.sleep(5)
+
+    mock_client.get_areas.side_effect = _slow_get_areas
+
+    assert await coordinator._async_update_data() is seed
+    assert coordinator._consecutive_failures == 1
+
+
+async def test_transient_api_error_serves_cached_snapshot(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """A non-auth API error with a cached snapshot does not raise."""
+    coordinator, seed = await _seeded_coordinator(hass, mock_config_entry, mock_client)
+    mock_client.get_zones.side_effect = InimApiError(ApiStatus.ERROR_EXECUTION)
+
+    assert await coordinator._async_update_data() is seed
+
+
+async def test_apikey_error_with_snapshot_still_triggers_reauth(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """An API-key rejection is never absorbed, even with a cached snapshot."""
+    coordinator, _ = await _seeded_coordinator(hass, mock_config_entry, mock_client)
+    mock_client.get_areas.side_effect = InimApiError(ApiStatus.ERROR_APIKEY)
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+# ---------------------------------------------------------------------------
+# api_stats is refreshed on its own slow cadence, not every cycle
+# ---------------------------------------------------------------------------
+async def test_api_stats_cached_between_refreshes(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    sample_api_stats,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """api_stats is read once, reused, then re-read after the interval."""
+    import custom_components.inim_prime.coordinator as coord_mod
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(coord_mod.time, "monotonic", lambda: clock["now"])
+    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
+
+    first = await coordinator._async_update_data()
+    clock["now"] += API_STATS_REFRESH_INTERVAL - 1
+    second = await coordinator._async_update_data()
+
+    assert first.api_stats == sample_api_stats
+    assert second.api_stats == sample_api_stats
+    mock_client.get_api_stats.assert_awaited_once()
+
+    clock["now"] += 1
+    await coordinator._async_update_data()
+    assert mock_client.get_api_stats.await_count == 2
+
+
+async def test_api_stats_failure_is_retried_next_cycle(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    sample_api_stats,
+) -> None:
+    """A failed api_stats read is retried on the next cycle, not after 10 min."""
+    mock_client.get_api_stats.side_effect = [InimConnectionError("nope"), sample_api_stats]
+    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
+
+    assert (await coordinator._async_update_data()).api_stats is None
+    assert (await coordinator._async_update_data()).api_stats == sample_api_stats
