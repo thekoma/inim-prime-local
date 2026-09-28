@@ -29,6 +29,7 @@ from .client import (
     Local6004Config,
     Local6004Error,
     NativeAreaStatus,
+    NativeZoneStatus,
     Output,
     Scenario,
     Version,
@@ -161,6 +162,11 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         self.native_client: Local6004Client | None = None
         self._native_failures = 0
         self._native_skip = 0
+        # Last successful native reading and when it started (monotonic), so
+        # a cgi cycle that began before it cannot roll the state back.
+        self._native_areas: dict[int, NativeAreaStatus] = {}
+        self._native_zones: dict[int, NativeZoneStatus] = {}
+        self._native_at: float | None = None
 
         super().__init__(
             hass,
@@ -199,6 +205,7 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             return self.data
 
         async with self._fetch_lock:
+            started = time.monotonic()
             try:
                 async with asyncio.timeout(DEFAULT_CYCLE_TIMEOUT):
                     data = await self._fetch_cycle()
@@ -218,7 +225,18 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
                 )
 
             self._note_success()
+            return self._overlay_native(data, started)
+
+    def _overlay_native(self, data: InimData, started: float) -> InimData:
+        """Re-apply a native reading taken after this cgi cycle started.
+
+        A cgi cycle takes seconds; if the native poll saw a change meanwhile,
+        the cgi snapshot is older and must not roll that change back.
+        """
+        if self._native_at is None or self._native_at < started:
             return data
+        areas = self._patch_areas(data, self._native_areas) or data
+        return self.apply_native_zones(areas, self._native_zones) or areas
 
     def _handle_failure(self, message: str, err: Exception) -> InimData:
         """Absorb a transient failed cycle, or raise once it is persistent.
@@ -347,40 +365,85 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         await super().async_shutdown()
 
     # ------------------------------------------------------------------
-    # Native fast path: live area state over the 6004 status command
+    # Native fast path: live area + zone state over the 6004 status commands
     # ------------------------------------------------------------------
-    async def async_native_area_poll(self, _now: object = None) -> None:
-        """Read live area state natively and push any change to entities.
+    async def async_native_poll(self, _now: object = None) -> None:
+        """Read live area and zone state natively and push any change to entities.
 
-        On a change the cached snapshot is patched and published immediately,
-        and a fast cgi poll is armed to reconcile the rest of the state. After
-        repeated failures the poll backs off for NATIVE_AREA_BACKOFF_TICKS ticks.
+        On a change the cached snapshot is patched and published immediately.
+        An area change also arms a fast cgi poll to reconcile the rest of the
+        state; zone changes do not (zones are fully covered natively, and doors
+        opening must not keep the cgi in its fast tier). After repeated
+        failures the poll backs off for NATIVE_AREA_BACKOFF_TICKS ticks.
         """
         if self.native_client is None or self.data is None:
             return
         if self._native_skip > 0:
             self._native_skip -= 1
             return
+        zone_ids = {zone.id for zone in self.data.zones}
+        read_at = time.monotonic()
         try:
             statuses = await self.native_client.async_get_area_statuses()
+            zone_statuses = (
+                await self.native_client.async_get_zone_statuses(zone_ids) if zone_ids else {}
+            )
         except Local6004Error as err:
             self._native_failures += 1
-            LOGGER.debug("Native area poll failed (%d): %s", self._native_failures, err)
+            LOGGER.debug("Native poll failed (%d): %s", self._native_failures, err)
             if self._native_failures >= NATIVE_AREA_FAILURES_BEFORE_BACKOFF:
                 self._native_skip = NATIVE_AREA_BACKOFF_TICKS
             return
         self._native_failures = 0
+        self._native_areas, self._native_zones, self._native_at = (
+            statuses,
+            zone_statuses,
+            read_at,
+        )
 
-        patched = self.apply_native_statuses(statuses)
+        area_patch = self.apply_native_statuses(statuses)
+        zone_patch = self.apply_native_zones(area_patch or self.data, zone_statuses)
+        patched = zone_patch or area_patch
         if patched is not None:
-            self.async_set_updated_data(patched)
+            # Publish without async_set_updated_data(): that would reschedule
+            # the cgi refresh on every change, and frequent zone activity
+            # would then starve the cgi poll.
+            self.data = patched
+            self.async_update_listeners()
+        if area_patch is not None:
             self.activate_fast_poll()
+
+    @staticmethod
+    def apply_native_zones(
+        data: InimData, statuses: dict[int, NativeZoneStatus]
+    ) -> InimData | None:
+        """Return ``data`` with native zone state applied, or None if unchanged."""
+        zones: list[Zone] = []
+        changed = False
+        for zone in data.zones:
+            native = statuses.get(zone.id)
+            if native is None:
+                zones.append(zone)
+                continue
+            new = replace(
+                zone,
+                state=native.state,
+                alarm_memory=native.alarm_memory,
+                excluded=native.excluded,
+            )
+            changed = changed or new != zone
+            zones.append(new)
+        return replace(data, zones=zones) if changed else None
 
     def apply_native_statuses(self, statuses: dict[int, NativeAreaStatus]) -> InimData | None:
         """Return a snapshot with native area state applied, or None if unchanged."""
-        data = self.data
-        if data is None:
+        if self.data is None:
             return None
+        return self._patch_areas(self.data, statuses)
+
+    @staticmethod
+    def _patch_areas(data: InimData, statuses: dict[int, NativeAreaStatus]) -> InimData | None:
+        """Return ``data`` with native area state applied, or None if unchanged."""
         areas: list[Area] = []
         changed = False
         for area in data.areas:

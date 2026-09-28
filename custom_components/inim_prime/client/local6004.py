@@ -16,7 +16,8 @@ context op-code; reads use op 0x11 (start) / 0x10 (continue) with
 ``[addr:4 LE][0000:4][len:4 LE][len:4 LE][00 00][op][chk=sum(prev19)&0xff]``.
 
 ⚠️ READ-ONLY: this module only ever emits the two read opcodes plus the
-read-only *status* command (op 6, partition statuses). It never builds a
+read-only *status* commands (op 6 partition statuses, op 7 terminal
+statuses). It never builds a
 write/program frame (a write is the same framing with a write opcode — on a
 production panel a stray write could brick it). ``_read_cmd`` and
 ``_status_cmd`` assert their opcodes.
@@ -27,6 +28,13 @@ GPL-3.0): request ``[op:4 LE][pin:6]`` (``74 00..`` = no PIN), response
 ``[header:18][3 bytes x 30 partitions]``; each record is
 ``[alarm flags][AreaMode][0x10 configured | 0x01 alarm memory]``. It answers in
 ~10 ms even when the cgi takes seconds, so it is the fast path for area state.
+
+Live terminal status (op 7, same source) takes ``[start:2 LE][end:2 LE]``
+(end exclusive, at most 20 terminals) and answers ``[header:18][10 bytes x 20]``.
+A record is ``[type][00][zone A: flags, 00, ZoneState, 00][zone B: ...]`` with
+type 0 = single zone, 3 = double zone; flags ``0x10`` = excluded (bypassed),
+``0x01`` = alarm memory. Zone ``n`` (< 1005) is half A of terminal ``n``; zone
+``n + 1005`` is half B of terminal ``n`` (verified against the cgi on a PrimeX).
 
 The EEPROM config offsets below are the **40x** layout (PrimeX firmware 4.x),
 which is a compile-time-constant memory map in the official client. They are
@@ -43,7 +51,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from .const import AreaMode
+from .const import AreaMode, ZoneState
 
 PORT = 6004
 _PREAMBLE = b"\x50\x50"
@@ -64,6 +72,19 @@ _PARTITION_REC = 3
 _PARTITION_COUNT = 30
 _PARTITION_CONFIGURED = 0x10
 _CLOSE_TIMEOUT = 1.0
+
+# Read-only status command: live terminal (zone) statuses.
+_OP_TERMINAL_STATUS = 7
+_TERMINAL_REC = 10
+_TERMINAL_CHUNK = 20
+_TERMINAL_SINGLE = 0
+_TERMINAL_DOUBLE = 3
+_ZONE_EXCLUDED = 0x10
+_ZONE_MEMORY = 0x01
+# Zone id of the second half (B) of terminal 0 on a double-zone terminal.
+SECOND_HALF_ZONE_OFFSET = 1005
+
+_STATUS_OPS = frozenset({_OP_PARTITION_STATUS, _OP_TERMINAL_STATUS})
 
 # Event log (40x): ring of 14-byte records at 0xA1D0.
 _LOG_ADDR = 0xA1D0
@@ -175,10 +196,70 @@ def _read_cmd(addr: int, length: int, *, cont: bool) -> bytes:
     return bytes(body)
 
 
-def _status_cmd(op: int) -> bytes:
+def _status_cmd(op: int, data: bytes = b"") -> bytes:
     """Build a read-only status command body (no PIN)."""
-    assert op == _OP_PARTITION_STATUS, "READ-ONLY guard"
-    return op.to_bytes(4, "little") + _NO_PIN
+    assert op in _STATUS_OPS, "READ-ONLY guard"
+    return op.to_bytes(4, "little") + _NO_PIN + data
+
+
+def zone_terminal(zone_id: int) -> tuple[int, int]:
+    """Return ``(terminal, half)`` holding a zone (half 0 = A, 1 = B)."""
+    if zone_id >= SECOND_HALF_ZONE_OFFSET:
+        return zone_id - SECOND_HALF_ZONE_OFFSET, 1
+    return zone_id, 0
+
+
+def terminal_chunks(terminals: set[int]) -> list[tuple[int, int]]:
+    """Group terminal ids into ``[start, end)`` requests of at most 20 terminals."""
+    chunks: list[tuple[int, int]] = []
+    for terminal in sorted(terminals):
+        if chunks and terminal < chunks[-1][0] + _TERMINAL_CHUNK:
+            chunks[-1] = (chunks[-1][0], terminal + 1)
+        else:
+            chunks.append((terminal, terminal + 1))
+    return chunks
+
+
+@dataclass(frozen=True)
+class NativeZoneStatus:
+    """Live state of one zone, as reported by the terminal status command."""
+
+    state: ZoneState
+    excluded: bool
+    alarm_memory: bool
+
+
+def _decode_zone_half(half: bytes) -> NativeZoneStatus | None:
+    try:
+        state = ZoneState(half[2])
+    except ValueError:
+        return None
+    return NativeZoneStatus(
+        state=state,
+        excluded=bool(half[0] & _ZONE_EXCLUDED),
+        alarm_memory=bool(half[0] & _ZONE_MEMORY),
+    )
+
+
+def decode_terminal_statuses(resp: bytes, start: int, end: int) -> dict[int, NativeZoneStatus]:
+    """Decode a terminal-status response for ``[start, end)`` into ``{zone_id: status}``.
+
+    Only single- and double-zone terminals yield zones; outputs, disabled and
+    unknown terminals are skipped. A short response raises ``ValueError``.
+    """
+    count = end - start
+    if len(resp) < _STATUS_HEADER + count * _TERMINAL_REC:
+        raise ValueError(f"short terminal-status response ({len(resp)} bytes)")
+    out: dict[int, NativeZoneStatus] = {}
+    for idx in range(count):
+        rec = resp[_STATUS_HEADER + idx * _TERMINAL_REC : _STATUS_HEADER + (idx + 1) * _TERMINAL_REC]
+        terminal = start + idx
+        halves = {_TERMINAL_SINGLE: 1, _TERMINAL_DOUBLE: 2}.get(rec[0], 0)
+        for half in range(halves):
+            status = _decode_zone_half(rec[2 + half * 4 : 6 + half * 4])
+            if status is not None:
+                out[terminal + half * SECOND_HALF_ZONE_OFFSET] = status
+    return out
 
 
 @dataclass(frozen=True)
@@ -338,11 +419,32 @@ class Local6004Client:
                 raise Local6004Error(str(err) or type(err).__name__) from err
 
     async def _get_area_statuses(self) -> dict[int, NativeAreaStatus]:
+        return decode_partition_statuses(await self._status(_status_cmd(_OP_PARTITION_STATUS)))
+
+    async def async_get_zone_statuses(
+        self, zone_ids: set[int], timeout: float = 3.0
+    ) -> dict[int, NativeZoneStatus]:
+        """Return live statuses for ``zone_ids`` over the persistent connection."""
+        async with self._status_lock:
+            try:
+                return await asyncio.wait_for(self._get_zone_statuses(zone_ids), timeout)
+            except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as err:
+                await self._close_status_conn()
+                raise Local6004Error(str(err) or type(err).__name__) from err
+
+    async def _get_zone_statuses(self, zone_ids: set[int]) -> dict[int, NativeZoneStatus]:
+        out: dict[int, NativeZoneStatus] = {}
+        for start, end in terminal_chunks({zone_terminal(z)[0] for z in zone_ids}):
+            data = start.to_bytes(2, "little") + end.to_bytes(2, "little")
+            resp = await self._status(_status_cmd(_OP_TERMINAL_STATUS, data))
+            out |= decode_terminal_statuses(resp, start, end)
+        return {zone_id: status for zone_id, status in out.items() if zone_id in zone_ids}
+
+    async def _status(self, body: bytes) -> bytes:
         if self._status_conn is None:
             self._status_conn = await asyncio.open_connection(self._host, self._port)
         reader, writer = self._status_conn
-        resp = await self._xfer(reader, writer, _status_cmd(_OP_PARTITION_STATUS), first=True)
-        return decode_partition_statuses(resp)
+        return await self._xfer(reader, writer, body, first=True)
 
     async def async_close(self) -> None:
         """Close the persistent status connection, if open."""

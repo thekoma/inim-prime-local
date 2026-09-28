@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from custom_components.inim_prime.client import local6004 as m
-from custom_components.inim_prime.client.const import AreaMode
+from custom_components.inim_prime.client.const import AreaMode, ZoneState
 
 _KEY, _IV = m.make_key_iv("pass")
 
@@ -393,4 +393,73 @@ async def test_close_does_not_hang_on_stalled_socket(monkeypatch: pytest.MonkeyP
     client = m.Local6004Client("host", "pass")
     await client.async_get_area_statuses()
     await asyncio.wait_for(client.async_close(), 1)  # bounded, lock released
+    assert client._status_conn is None
+
+
+# --------------------------------------------------------------- terminal status
+def _term(kind: int, a: bytes = b"\x00\x00\x00\x00", b: bytes = b"\x00\x00\x00\x00") -> bytes:
+    return bytes([kind, 0]) + a + b
+
+
+def _terminal_resp(records: list[bytes]) -> bytes:
+    data = b"".join(records).ljust(m._TERMINAL_REC * m._TERMINAL_CHUNK, b"\x00")
+    return _resp(bytes(m._STATUS_HEADER) + data)
+
+
+def test_zone_terminal_mapping() -> None:
+    assert m.zone_terminal(16) == (16, 0)
+    assert m.zone_terminal(1021) == (16, 1)
+    assert m.zone_terminal(1005) == (0, 1)
+
+
+def test_terminal_chunks() -> None:
+    assert m.terminal_chunks(set()) == []
+    assert m.terminal_chunks({0, 1, 2, 3, 4, 10, 19}) == [(0, 20)]
+    assert m.terminal_chunks({0, 19, 20, 45}) == [(0, 20), (20, 21), (45, 46)]
+
+
+def test_terminal_status_cmd_guard() -> None:
+    assert m._status_cmd(7, b"\x00\x00\x14\x00")[-4:] == b"\x00\x00\x14\x00"
+    with pytest.raises(AssertionError):
+        m._status_cmd(9)  # SET_ZONE_BYPASS must never be built
+
+
+def test_decode_terminal_statuses() -> None:
+    records = [
+        _term(3, b"\x18\x00\x02\x00", b"\x08\x00\x01\x00"),  # t0 double: A open+excluded, B ready
+        _term(0, b"\x09\x00\x01\x00"),  # t1 single: ready, alarm memory
+        _term(1),  # t2 output -> skipped
+        _term(4),  # t3 disabled -> skipped
+        _term(0, b"\x08\x00\x07\x00"),  # t4 single with unknown state -> skipped
+    ]
+    resp = bytes(m._STATUS_HEADER) + b"".join(records)
+    out = m.decode_terminal_statuses(resp, 0, 5)
+    assert set(out) == {0, 1005, 1}
+    assert out[0] == m.NativeZoneStatus(state=ZoneState.ALARM, excluded=True, alarm_memory=False)
+    assert out[1005] == m.NativeZoneStatus(state=ZoneState.READY, excluded=False, alarm_memory=False)
+    assert out[1] == m.NativeZoneStatus(state=ZoneState.READY, excluded=False, alarm_memory=True)
+    with pytest.raises(ValueError, match="short"):
+        m.decode_terminal_statuses(resp, 0, 20)
+
+
+async def test_zone_statuses_chunks_and_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    first = _terminal_resp([_term(3, b"\x08\x00\x01\x00", b"\x18\x00\x02\x00")])
+    second = _terminal_resp([_term(0, b"\x08\x00\x02\x00")])
+    pairs = _patch_sessions(monkeypatch, [[first, second]])
+    client = m.Local6004Client("host", "pass")
+
+    out = await client.async_get_zone_statuses({0, 1005, 30})
+
+    assert out[0].state is ZoneState.READY
+    assert out[1005].excluded
+    assert out[30].state is ZoneState.ALARM
+    sent = pairs[0][1].sent
+    assert len(sent) == 2  # [0,1) then [30,31), one connection
+
+
+async def test_zone_statuses_error_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sessions(monkeypatch, [[_resp(bytes(m._STATUS_HEADER))]])
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.Local6004Error, match="short"):
+        await client.async_get_zone_statuses({0})
     assert client._status_conn is None

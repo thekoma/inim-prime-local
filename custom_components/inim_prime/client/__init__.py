@@ -20,10 +20,12 @@ from .local6004 import (
     Local6004Config,
     Local6004Error,
     NativeAreaStatus,
+    NativeZoneStatus,
     SceneDef,
     decode_event_log,
     decode_partition_statuses,
     decode_scene,
+    decode_terminal_statuses,
     scene_is_active,
 )
 from .models import (
@@ -71,7 +73,9 @@ __all__ = [
     "Local6004Config",
     "Local6004Error",
     "NativeAreaStatus",
+    "NativeZoneStatus",
     "decode_partition_statuses",
+    "decode_terminal_statuses",
     "SceneDef",
     "decode_event_log",
     "decode_scene",

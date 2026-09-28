@@ -85,9 +85,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
         entry.async_on_unload(
             async_track_time_interval(
                 hass,
-                coordinator.async_native_area_poll,
+                coordinator.async_native_poll,
                 timedelta(seconds=NATIVE_AREA_POLL_INTERVAL),
-                name="inim_prime native area poll",
+                name="inim_prime native poll",
                 cancel_on_shutdown=True,
             )
         )

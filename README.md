@@ -78,7 +78,7 @@ Open **Configure** on the integration to tune how it reads the panel.
 | **Enable realtime push** | off | Register a local webhook for instant updates (see below) |
 | **Zone label language** | Auto | Language used to guess each zone's icon (and room) from its name (window/door/garage/motion/smoke/…). *Auto* follows Home Assistant's language; 12 languages are supported. |
 | **Group zones by room** | on | Place each zone under a per-room device (Camera, Bagno, Garage…) guessed from its name, so you can assign whole rooms to HA areas. |
-| **Fast area polling (native protocol)** | on | Read every area's arm/disarm state every 2 s over the panel's native TCP 6004 protocol (read-only, ~10 ms per read), so arm/disarm shows up within ~2 s without push. The cgi poll keeps running for everything else. |
+| **Fast area and zone polling (native protocol)** | on | Read every area's arm/disarm state and every zone's state (open/closed, excluded, alarm memory) every 2 s over the panel's native TCP 6004 protocol (read-only, ~15–50 ms per cycle), so changes show up within ~2 s without push. The cgi poll keeps running for names, outputs, scenarios and faults. |
 
 ### How fast can it go? (measured on a real PrimeX 4.07)
 
