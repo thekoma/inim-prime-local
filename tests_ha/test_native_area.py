@@ -281,3 +281,65 @@ async def test_native_poll_skips_zone_read_without_zones(
     await coordinator.async_native_poll()
 
     native.async_get_zone_statuses.assert_not_awaited()
+
+
+async def test_native_update_does_not_reschedule_cgi(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """Native changes notify listeners without rescheduling the cgi refresh."""
+    native = AsyncMock()
+    native.async_get_area_statuses.return_value = {}
+    native.async_get_zone_statuses.return_value = {1: OPEN}
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+    calls: list[None] = []
+    unsub = coordinator.async_add_listener(lambda: calls.append(None))
+    coordinator.async_set_updated_data = None  # type: ignore[assignment,method-assign]
+
+    await coordinator.async_native_poll()  # would raise if async_set_updated_data were used
+
+    assert calls
+    assert coordinator.data.zones[0].state is ZoneState.ALARM
+    unsub()
+
+
+async def test_cgi_cycle_does_not_roll_back_fresher_native_state(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    sample_areas,
+) -> None:
+    """A native read taken during a cgi cycle wins over that cycle's stale data."""
+    native = AsyncMock()
+    native.async_get_area_statuses.return_value = {1: ARMED}
+    native.async_get_zone_statuses.return_value = {1: OPEN}
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+
+    async def _stale_areas_with_concurrent_native_read():
+        await coordinator.async_native_poll()  # the panel changed mid-cycle
+        return sample_areas  # the cgi still reports DISARMED
+
+    mock_client.get_areas.side_effect = _stale_areas_with_concurrent_native_read
+    data = await coordinator._async_update_data()
+
+    assert data.areas[0].mode is AreaMode.TOTAL
+    assert data.zones[0].state is ZoneState.ALARM
+    coordinator.async_cancel_decay()
+
+
+async def test_cgi_cycle_wins_over_older_native_state(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """A native read taken before the cgi cycle started does not override it."""
+    native = AsyncMock()
+    native.async_get_area_statuses.return_value = {1: ARMED}
+    coordinator = await _coordinator(hass, mock_config_entry, mock_client, native)
+    await coordinator.async_native_poll()  # native says armed, before the cycle
+    coordinator.async_cancel_decay()
+
+    data = await coordinator._async_update_data()  # cgi (newer) says disarmed
+
+    assert data.areas[0].mode is AreaMode.DISARMED
