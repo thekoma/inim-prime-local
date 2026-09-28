@@ -88,6 +88,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
     if native_commands:
         # Opt-in native write commands (cgi fallback only when never sent).
         coordinator.command_client = local_client
+        if not native_poll:
+            LOGGER.info(
+                "Native commands are on without fast area and zone polling: after a"
+                " native command the state is only refreshed by the slower cgi poll"
+            )
     if native_poll or native_commands:
         # Both share the persistent connection: close it on unload.
         entry.async_on_unload(local_client.async_close)

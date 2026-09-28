@@ -14,11 +14,14 @@ running a command twice:
   panel. It is **never** retried on the cgi: the state is re-read and a
   :class:`HomeAssistantError` tells the caller to check the panel.
 
-Arming (any target mode other than disarmed) is sent natively only when the
-fresh native zone state shows every non-bypassed zone of the target areas
-ready. Otherwise the cgi is used, so the panel's own readiness check (and its
-ZONES_NOT_READY answer) applies: how the native command treats open zones is
-not known. Scenarios go native only when every target maps to one mode.
+Arming (any target mode other than disarmed) reads the zones of the target
+areas natively, under the same lock and right before sending, and sends only
+if every one is ready or bypassed. Otherwise nothing is sent and the cgi is
+used, so the panel's own readiness check (and its ZONES_NOT_READY answer)
+applies: how the native command treats open zones is not known. Tamper,
+faults and alarm memory are not checked on the native path. Scenarios go
+native only when every target maps to one mode and the panel has no
+partition beyond the decoded scene range (0-11).
 
 cgi failures propagate as :class:`InimApiError` / :class:`InimConnectionError`
 so the callers keep translating them as before.
@@ -31,12 +34,13 @@ from collections.abc import Awaitable, Callable
 from homeassistant.exceptions import HomeAssistantError
 
 from .client import (
+    SCENE_DECODED_PARTITIONS,
     AreaMode,
     ArmMode,
     Local6004Client,
     NativeCommandError,
     NativeCommandNotSent,
-    ZoneState,
+    NativeZonesNotReady,
     scene_target_modes,
 )
 from .const import DOMAIN, LOGGER
@@ -65,9 +69,13 @@ async def _async_run(
         return
     try:
         await native(client)
-    except (NativeCommandNotSent, ValueError) as err:
-        # A ValueError is the client refusing the arguments before sending
-        # (e.g. an id outside the native range): equally never sent.
+    except NativeZonesNotReady as err:
+        # The cgi then applies the panel's own readiness check (and answers
+        # ZONES_NOT_READY), exactly as with the option off.
+        LOGGER.debug("Native %s not sent (%s); using the cgi", what, err)
+        await cgi()
+        return
+    except NativeCommandNotSent as err:
         LOGGER.warning("Native %s was not sent (%s); sending it over the cgi", what, err)
         await cgi()
         return
@@ -87,26 +95,27 @@ async def _async_run(
     await coordinator.async_native_poll()
 
 
-def _ready_to_arm(coordinator: InimDataUpdateCoordinator, modes: dict[int, AreaMode]) -> bool:
-    """Return True if the native state shows the armed targets ready.
+def _zones_to_check(
+    coordinator: InimDataUpdateCoordinator, modes: dict[int, AreaMode]
+) -> set[int] | None:
+    """Return the zones that must be ready before ``modes`` go natively.
 
-    Needs a healthy native poll (fresh zone state) and the zone -> area map.
-    A zone that is neither ready nor bypassed, in an area being armed, or
-    with no known areas, makes this False: the cgi then decides.
+    They are the zones of every area being armed (not disarmed), from the
+    native zone -> area map; the client reads them live right before
+    sending. None (use the cgi) when that map is missing or a known zone is
+    not in it, since its areas, and so whether it matters, are unknown.
     """
     armed = {area_id for area_id, mode in modes.items() if mode is not AreaMode.DISARMED}
     if not armed:
-        return True
+        return set()
     local = coordinator.local_config
-    if not coordinator.native_healthy or local is None or not local.zone_areas:
-        return False
-    for zone in coordinator.data.zones:
-        if zone.excluded or zone.state is ZoneState.READY:
-            continue
-        areas = local.zone_areas.get(zone.id)
-        if areas is None or armed.intersection(areas):
-            return False
-    return True
+    if local is None or not local.zone_areas:
+        return None
+    if any(zone.id not in local.zone_areas for zone in coordinator.data.zones):
+        return None
+    return {
+        zone_id for zone_id, areas in local.zone_areas.items() if armed.intersection(areas)
+    }
 
 
 def _native_modes(
@@ -116,11 +125,12 @@ def _native_modes(
     if coordinator.command_client is None:
         return None
     known = {area.id for area in coordinator.data.areas}
-    if not modes.keys() <= known or not _ready_to_arm(coordinator, modes):
+    zones = _zones_to_check(coordinator, modes)
+    if not modes.keys() <= known or zones is None:
         return None
 
     async def _send(client: Local6004Client) -> None:
-        await client.async_set_area_modes(modes)
+        await client.async_set_area_modes(modes, require_ready=zones)
 
     return _send
 
@@ -147,7 +157,10 @@ async def async_apply_scenario(coordinator: InimDataUpdateCoordinator, scenario_
         (s for s in (local.scenes if local is not None else []) if s.id == scenario_id), None
     )
     modes = scene_target_modes(scene.arms) if scene is not None else None
-    if modes is not None:
+    # Scene definitions only cover partitions 0-11: on a panel with more, a
+    # scenario might also set partitions the decode cannot see.
+    decoded = all(area.id < SCENE_DECODED_PARTITIONS for area in coordinator.data.areas)
+    if modes is not None and decoded:
         native = _native_modes(coordinator, modes)
 
     async def _cgi() -> object:

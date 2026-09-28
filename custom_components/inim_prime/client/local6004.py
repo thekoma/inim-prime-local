@@ -78,7 +78,7 @@ import asyncio
 import datetime as dt
 import logging
 import re
-from collections.abc import Awaitable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -158,10 +158,10 @@ _ZONE_ID_COUNT = 2 * SECOND_HALF_ZONE_OFFSET
 # Bytes of the response header that echo the opcode (as its bitwise NOT).
 _ECHO_LEN = 4
 # Per-command ceiling for a write: a liveness read (itself capped at
-# STATUS_TIMEOUT) plus the write, each of which can take ~4 s on a cold
-# channel. A timeout after the write was sent leaves its outcome unknown, so
+# STATUS_TIMEOUT), an optional live zone pre-check and the write, each of
+# which can take ~4 s on a cold channel. A timeout after the write was sent leaves its outcome unknown, so
 # this is generous.
-COMMAND_TIMEOUT = 10.0
+COMMAND_TIMEOUT = 15.0
 # I/O failures of one exchange on the persistent connection.
 _IO_ERRORS = (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError)
 
@@ -223,6 +223,11 @@ _FACTORY_SCENARIO_RE = re.compile(r"(?:Scenario|SCENARIO)\s+(\d+)")
 
 # Scenario MODO nibble bits -> live AreaMode they require.
 _MODE_BIT = {0x01: "away", 0x02: "stay", 0x04: "disarm"}
+# Only the first 6 MODO bytes of a scenario record are decoded (one nibble per
+# partition), so scene definitions cover partitions 0-11 only. A scenario on a
+# panel with more partitions may target ones this decode does not see.
+_SCENE_MODO_BYTES = 6
+SCENE_DECODED_PARTITIONS = 2 * _SCENE_MODO_BYTES
 _MODE_TO_AREAMODE: dict[str, AreaMode] = {
     "away": AreaMode.TOTAL,
     "stay": AreaMode.PARTIAL,
@@ -753,6 +758,14 @@ class NativeCommandNotSent(NativeCommandError):
     """
 
 
+class NativeCommandInvalid(NativeCommandNotSent):
+    """The client refused the arguments (id out of range, bad PIN); nothing sent."""
+
+
+class NativeZonesNotReady(NativeCommandNotSent):
+    """The live pre-check found a zone of the target areas not ready; nothing sent."""
+
+
 class NativeCommandUncertain(NativeCommandError):
     """The command was sent, but its outcome is unknown.
 
@@ -767,6 +780,18 @@ class NativeCommandRejected(NativeCommandUncertain):
     Whether the panel executed the command is not known (the response codes
     are undocumented), so this is treated as uncertain as well.
     """
+
+
+def _validated(op: int, build: Callable[[], bytes]) -> bytes:
+    """Run a frame builder, turning its argument errors into NativeCommandInvalid.
+
+    Only argument checks raise ValueError here, before any connection is
+    touched, so the caller may safely use another channel instead.
+    """
+    try:
+        return build()
+    except ValueError as err:
+        raise NativeCommandInvalid(op, str(err)) from err
 
 
 class _Progress:
@@ -837,6 +862,7 @@ class Local6004Client:
         self,
         modes: Mapping[int, AreaMode],
         *,
+        require_ready: Collection[int] = (),
         pin: str | None = None,
         timeout: float = COMMAND_TIMEOUT,
     ) -> None:
@@ -844,8 +870,14 @@ class Local6004Client:
 
         Partitions not in ``modes`` are left alone, so this also applies an
         arming scenario's targets at once.
+
+        ``require_ready`` zones are read live in the same locked exchange,
+        right before sending: if one is neither ready nor bypassed (or not
+        reported), :class:`NativeZonesNotReady` is raised and nothing is
+        sent. How the panel treats a native arm with open zones is unknown.
         """
-        await self._command(_OP_SET_ARMING, arming_data(modes), pin, timeout)
+        data = _validated(_OP_SET_ARMING, lambda: arming_data(modes))
+        await self._command(_OP_SET_ARMING, data, pin, timeout, set(require_ready))
 
     async def async_set_zone_bypass(
         self,
@@ -856,7 +888,8 @@ class Local6004Client:
         timeout: float = COMMAND_TIMEOUT,
     ) -> None:
         """Bypass (exclude) or un-bypass a zone (op 9)."""
-        await self._command(_OP_SET_ZONE_BYPASS, zone_bypass_data(zone_id, excluded), pin, timeout)
+        data = _validated(_OP_SET_ZONE_BYPASS, lambda: zone_bypass_data(zone_id, excluded))
+        await self._command(_OP_SET_ZONE_BYPASS, data, pin, timeout)
 
     async def async_set_output(
         self,
@@ -867,7 +900,8 @@ class Local6004Client:
         timeout: float = COMMAND_TIMEOUT,
     ) -> None:
         """Turn a panel output (terminal 1005..1009) on or off (op 8)."""
-        await self._command(_OP_SET_OUTPUT, output_data(terminal, on), pin, timeout)
+        data = _validated(_OP_SET_OUTPUT, lambda: output_data(terminal, on))
+        await self._command(_OP_SET_OUTPUT, data, pin, timeout)
 
     async def async_reset_areas(
         self,
@@ -877,21 +911,31 @@ class Local6004Client:
         timeout: float = COMMAND_TIMEOUT,
     ) -> None:
         """Reset the partitions' alarm memory (op 16)."""
-        await self._command(_OP_RESET_PARTITIONS, reset_data(area_ids), pin, timeout)
+        data = _validated(_OP_RESET_PARTITIONS, lambda: reset_data(area_ids))
+        await self._command(_OP_RESET_PARTITIONS, data, pin, timeout)
 
-    async def _command(self, op: int, data: bytes, pin: str | None, timeout: float) -> None:
+    async def _command(
+        self,
+        op: int,
+        data: bytes,
+        pin: str | None,
+        timeout: float,
+        require_ready: set[int] | None = None,
+    ) -> None:
         """Send one write command over the persistent connection, once.
 
-        Never retried here. A failure raises :class:`NativeCommandNotSent` when
-        the frame was never handed to the socket, and
+        Never retried here. A failure raises :class:`NativeCommandNotSent` (or
+        a subclass) when the frame was never handed to the socket, and
         :class:`NativeCommandUncertain` (or its subclass
         :class:`NativeCommandRejected`) once it may have reached the panel.
         """
-        body = _write_cmd(op, data, pin)
+        body = _validated(op, lambda: _write_cmd(op, data, pin))
         progress = _Progress()
         async with self._status_lock:
             try:
-                resp = await asyncio.wait_for(self._send_command(body, progress), timeout)
+                resp = await asyncio.wait_for(
+                    self._send_command(op, body, progress, require_ready or set()), timeout
+                )
             except _IO_ERRORS as err:
                 await self._close_status_conn()
                 detail = str(err) or type(err).__name__
@@ -905,7 +949,9 @@ class Local6004Client:
         _LOGGER.debug("Native command %d answered %s", op, resp[:_STATUS_HEADER].hex(" "))
         check_command_response(op, resp)
 
-    async def _send_command(self, body: bytes, progress: _Progress) -> bytes:
+    async def _send_command(
+        self, op: int, body: bytes, progress: _Progress, require_ready: set[int]
+    ) -> bytes:
         if self._status_conn is not None:
             # Prove the kept-open connection is alive with a read-only status
             # read first: a write into a connection the panel already dropped
@@ -920,6 +966,16 @@ class Local6004Client:
                 await self._close_status_conn()
         if self._status_conn is None:
             self._status_conn = await asyncio.open_connection(self._host, self._port)
+        if require_ready:
+            live = await self._get_zone_statuses(require_ready)
+            blocked = sorted(
+                zone_id
+                for zone_id in require_ready
+                if (status := live.get(zone_id)) is None
+                or not (status.excluded or status.state is ZoneState.READY)
+            )
+            if blocked:
+                raise NativeZonesNotReady(op, f"zones not ready: {blocked}")
         reader, writer = self._status_conn
         # From here on the panel may receive the command.
         progress.sent = True
@@ -999,7 +1055,7 @@ class Local6004Client:
         )
         scenes = []
         for sid in range(_SCENARIO_COUNT):
-            rec = modi[sid * _SCENARIO_MODI_REC : sid * _SCENARIO_MODI_REC + 6]
+            rec = modi[sid * _SCENARIO_MODI_REC : sid * _SCENARIO_MODI_REC + _SCENE_MODO_BYTES]
             arms = decode_scene(rec)
             if arms:  # skip undefined scenarios
                 scenes.append(SceneDef(id=sid, arms=arms))

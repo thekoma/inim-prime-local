@@ -354,8 +354,73 @@ async def test_bad_arguments_never_open_a_connection(monkeypatch: pytest.MonkeyP
     opener = _Opener()
     _install(monkeypatch, opener)
     client = m.Local6004Client("host", "pass")
-    with pytest.raises(ValueError):
+    with pytest.raises(m.NativeCommandInvalid, match="out of range"):
         await client.async_set_output(1, True)
-    with pytest.raises(ValueError, match="PIN"):
+    with pytest.raises(m.NativeCommandInvalid, match="PIN"):
         await client.async_reset_areas([0], pin="x")
+    for call in (
+        client.async_set_area_modes({}),
+        client.async_set_zone_bypass(5000, True),
+    ):
+        with pytest.raises(m.NativeCommandInvalid):
+            await call
+    assert issubclass(m.NativeCommandInvalid, m.NativeCommandNotSent)
     assert opener.calls == 0
+
+
+async def test_bad_preamble_after_sending_is_uncertain(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = _stream(b"\xaa\xaa" + _ack(9)[2:])
+    _install(monkeypatch, _Opener(stream))
+    with pytest.raises(m.NativeCommandUncertain, match="bad preamble") as info:
+        await m.Local6004Client("host", "pass").async_set_zone_bypass(4, True)
+    assert not isinstance(info.value, m.NativeCommandNotSent)
+    assert len(stream[1].sent) == 1
+
+
+# ----------------------------------------------------------- live zone pre-check
+def _zones_resp(start: int, records: list[bytes]) -> bytes:
+    """A terminal-status answer for ``[start, start + len(records))``."""
+    return _resp(bytes(m._STATUS_HEADER) + b"".join(records))
+
+
+_READY = b"\x00\x00\x01\x00"  # flags, 00, ZoneState.READY, 00
+_OPEN = b"\x00\x00\x02\x00"  # ZoneState.ALARM
+_OPEN_BYPASSED = b"\x10\x00\x02\x00"
+
+
+@pytest.mark.parametrize(
+    ("zone_b", "ready"),
+    [(_READY, True), (_OPEN_BYPASSED, True), (_OPEN, False), (b"\x00\x00\x09\x00", False)],
+)
+async def test_arm_pre_check_reads_the_zones_live(
+    monkeypatch: pytest.MonkeyPatch, zone_b: bytes, ready: bool
+) -> None:
+    # Terminal 3 is double: zone 3 (half A) and zone 1008 (half B).
+    answer = _zones_resp(3, [bytes([3, 0]) + _READY + zone_b])
+    stream = _stream(answer, _ack(3))
+    _install(monkeypatch, _Opener(stream))
+    client = m.Local6004Client("host", "pass")
+
+    call = client.async_set_area_modes({2: AreaMode.TOTAL}, require_ready=[3, 1008])
+    if ready:
+        await call
+    else:
+        with pytest.raises(m.NativeZonesNotReady, match=r"\[1008\]"):
+            await call
+
+    sent = [_decrypt(f) for f in stream[1].sent]
+    assert sent[0] == m._status_cmd(7, b"\x03\x00\x04\x00")
+    assert [f[:4] for f in sent[1:]] == ([b"\x03\x00\x00\x00"] if ready else [])
+    # A refused pre-check completed its exchange: the connection is kept.
+    assert client._status_conn is stream
+
+
+async def test_arm_pre_check_failure_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = _stream()  # the pre-check read gets EOF
+    _install(monkeypatch, _Opener(stream))
+    with pytest.raises(m.NativeCommandNotSent) as info:
+        await m.Local6004Client("host", "pass").async_set_area_modes(
+            {0: AreaMode.TOTAL}, require_ready=[1]
+        )
+    assert not isinstance(info.value, m.NativeCommandUncertain)
+    assert [_decrypt(f)[:4] for f in stream[1].sent] == [b"\x07\x00\x00\x00"]
