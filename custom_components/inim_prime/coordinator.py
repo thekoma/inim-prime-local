@@ -61,6 +61,7 @@ from .const import (
     LOGGER,
     NATIVE_AREA_BACKOFF_TICKS,
     NATIVE_AREA_FAILURES_BEFORE_BACKOFF,
+    NATIVE_CGI_INTERVAL,
 )
 
 
@@ -301,8 +302,8 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             self._backed_off = True
             # Stop hammering: cancel any pending fast-poll decay and pin idle.
             self.async_cancel_decay()
-            if self.update_interval != self._idle_interval:
-                self.update_interval = self._idle_interval
+            if self.update_interval != self.rest_interval:
+                self.update_interval = self.rest_interval
                 self._schedule_refresh()
 
     @callback
@@ -341,11 +342,44 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
 
     @callback
     def _decay_to_idle(self, _now: object = None) -> None:
-        """Relax back to the idle interval after the active window."""
+        """Relax back to the resting interval after the active window."""
         self._cancel_decay = None
-        if self.update_interval != self._idle_interval:
-            self.update_interval = self._idle_interval
+        self._relax_to_rest()
+
+    @property
+    def native_healthy(self) -> bool:
+        """Return True while the native poll is attached and not backing off."""
+        return (
+            self.native_client is not None
+            and self._native_failures < NATIVE_AREA_FAILURES_BEFORE_BACKOFF
+        )
+
+    @property
+    def rest_interval(self) -> timedelta:
+        """Resting cgi interval: slow while the native poll covers live state.
+
+        Areas, zones and scenario state come from the native poll, so the cgi
+        is only needed for outputs, faults and diagnostics. When the native
+        channel fails, fall back to the configured idle interval.
+        """
+        if self.native_healthy:
+            return max(self._idle_interval, timedelta(seconds=NATIVE_CGI_INTERVAL))
+        return self._idle_interval
+
+    @callback
+    def _relax_to_rest(self) -> None:
+        """Apply the resting interval unless a fast-poll window is running."""
+        if self._cancel_decay is not None:
+            return
+        if self.update_interval != self.rest_interval:
+            self.update_interval = self.rest_interval
             self._schedule_refresh()
+
+    @callback
+    def async_attach_native(self, client: Local6004Client) -> None:
+        """Attach the native client and relax the cgi to its resting interval."""
+        self.native_client = client
+        self._relax_to_rest()
 
     @callback
     def async_cancel_decay(self) -> None:
@@ -393,8 +427,13 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             LOGGER.debug("Native poll failed (%d): %s", self._native_failures, err)
             if self._native_failures >= NATIVE_AREA_FAILURES_BEFORE_BACKOFF:
                 self._native_skip = NATIVE_AREA_BACKOFF_TICKS
+                # The cgi is authoritative again: back to the idle interval.
+                self._relax_to_rest()
             return
+        recovered = self._native_failures >= NATIVE_AREA_FAILURES_BEFORE_BACKOFF
         self._native_failures = 0
+        if recovered:
+            self._relax_to_rest()
         self._native_areas, self._native_zones, self._native_at = (
             statuses,
             zone_statuses,
