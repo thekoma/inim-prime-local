@@ -260,6 +260,26 @@ async def test_command_reconnects_when_the_probe_fails(monkeypatch: pytest.Monke
     assert client._status_conn is fresh
 
 
+async def test_command_replaces_a_stalled_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _StallsAfterFirst(_FakeReader):
+        async def readexactly(self, n: int) -> bytes:
+            if self._pos >= len(self._buf):
+                await asyncio.sleep(5)
+            return await super().readexactly(n)
+
+    stalled = (_StallsAfterFirst(_status_resp({})), _FakeWriter())
+    fresh = _stream(_ack(8))
+    _install(monkeypatch, _Opener(stalled, fresh))
+    monkeypatch.setattr(m, "STATUS_TIMEOUT", 0.05)
+    client = m.Local6004Client("host", "pass")
+    await client.async_get_area_statuses()
+
+    await client.async_set_output(1005, True, timeout=2)
+
+    assert [_decrypt(f)[:4] for f in stalled[1].sent] == [b"\x06\x00\x00\x00"] * 2
+    assert [_decrypt(f)[:4] for f in fresh[1].sent] == [b"\x08\x00\x00\x00"]
+
+
 async def test_connect_failure_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     opener = _Opener(OSError("refused"))
     _install(monkeypatch, opener)

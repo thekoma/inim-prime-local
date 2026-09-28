@@ -157,9 +157,10 @@ _BYPASS_OFF = 2
 _ZONE_ID_COUNT = 2 * SECOND_HALF_ZONE_OFFSET
 # Bytes of the response header that echo the opcode (as its bitwise NOT).
 _ECHO_LEN = 4
-# Per-command ceiling for a write: a liveness read plus the write itself, each
-# of which can take ~4 s on a cold channel. A timeout after the write was sent
-# leaves its outcome unknown, so this is generous.
+# Per-command ceiling for a write: a liveness read (itself capped at
+# STATUS_TIMEOUT) plus the write, each of which can take ~4 s on a cold
+# channel. A timeout after the write was sent leaves its outcome unknown, so
+# this is generous.
 COMMAND_TIMEOUT = 10.0
 # I/O failures of one exchange on the persistent connection.
 _IO_ERRORS = (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError)
@@ -909,9 +910,13 @@ class Local6004Client:
             # Prove the kept-open connection is alive with a read-only status
             # read first: a write into a connection the panel already dropped
             # would leave its outcome unknown, a failed read is harmless.
+            # Bounded on its own, so a stalled connection is replaced while
+            # the command budget still covers a reconnect and the write.
             try:
-                await self._status(_status_cmd(_OP_PARTITION_STATUS))
-            except (OSError, ValueError, asyncio.IncompleteReadError):
+                await asyncio.wait_for(
+                    self._status(_status_cmd(_OP_PARTITION_STATUS)), STATUS_TIMEOUT
+                )
+            except _IO_ERRORS:
                 await self._close_status_conn()
         if self._status_conn is None:
             self._status_conn = await asyncio.open_connection(self._host, self._port)

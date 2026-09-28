@@ -362,6 +362,7 @@ async def test_possibly_sent_is_never_retried_on_the_cgi(
     getattr(mock_client, cgi_write).assert_not_awaited()
     # The real state is re-read so the UI shows what the panel did.
     native.async_get_area_statuses.assert_awaited_once()
+    assert mock_client.get_areas.await_count == 2  # setup cycle + the refresh
 
 
 # ------------------------------------------------------------ setup / entities

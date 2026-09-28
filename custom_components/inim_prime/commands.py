@@ -73,7 +73,10 @@ async def _async_run(
         return
     except NativeCommandError as err:
         LOGGER.warning("Native %s may have reached the panel: %s. Not retried", what, err)
+        # Re-read both ways: the native poll may skip (a tick in flight, or
+        # backing off), and the caller never reaches its own refresh.
         await coordinator.async_native_poll()
+        await coordinator.async_request_refresh()
         raise HomeAssistantError(
             translation_domain=DOMAIN,
             translation_key="native_command_uncertain",
