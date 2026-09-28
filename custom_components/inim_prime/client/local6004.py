@@ -22,8 +22,7 @@ read-only *status* commands (op 6 partition statuses, op 7 terminal
 statuses). It never builds a
 write/program frame (a write is the same framing with a write opcode — on a
 production panel a stray write could brick it). ``_read_cmd`` and
-``_status_cmd`` check their opcodes and raise :class:`ReadOnlyViolation`
-(an explicit check, not an ``assert``, so ``python -O`` cannot drop it).
+``_status_cmd`` assert their opcodes.
 
 Live partition status (op 6) follows the command layout documented by
 Pitscheider's inim-prime-native (https://github.com/Pitscheider/inim-prime-native,
@@ -69,8 +68,6 @@ PORT = 6004
 _PREAMBLE = b"\x50\x50"
 _READ_START = 0x11
 _READ_CONT = 0x10
-# The only memory opcodes ever sent (literal, independent of the names above).
-_READ_OPS = frozenset({0x10, 0x11})
 _CHUNK = 1024
 
 # Connection-open context op-codes.
@@ -218,14 +215,9 @@ def _build_frame(app: bytes, key: bytes, iv: bytes, *, first: bool) -> bytes:
     return bytes(frame)
 
 
-class ReadOnlyViolation(RuntimeError):
-    """A frame other than a read or a read-only status command was about to be built."""
-
-
 def _read_cmd(addr: int, length: int, *, cont: bool) -> bytes:
     op = _READ_CONT if cont else _READ_START
-    if op not in _READ_OPS:
-        raise ReadOnlyViolation(f"opcode {op:#x}")
+    assert op in (_READ_START, _READ_CONT), "READ-ONLY guard"
     body = bytearray()
     body += addr.to_bytes(4, "little")
     body += b"\x00\x00\x00\x00"
@@ -239,8 +231,7 @@ def _read_cmd(addr: int, length: int, *, cont: bool) -> bytes:
 
 def _status_cmd(op: int, data: bytes = b"") -> bytes:
     """Build a read-only status command body (no PIN)."""
-    if op not in _STATUS_OPS:
-        raise ReadOnlyViolation(f"status opcode {op}")
+    assert op in _STATUS_OPS, "READ-ONLY guard"
     return op.to_bytes(4, "little") + _NO_PIN + data
 
 

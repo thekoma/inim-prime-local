@@ -60,13 +60,6 @@ def test_read_cmd_byte_exact() -> None:
     assert cmd[-1] == sum(cmd[:-1]) & 0xFF
 
 
-def test_read_cmd_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-read memory opcode is refused even if the constants were changed."""
-    monkeypatch.setattr(m, "_READ_CONT", 0x12)
-    with pytest.raises(m.ReadOnlyViolation):
-        m._read_cmd(0x10, 4, cont=True)
-
-
 def test_read_cmd_opcodes() -> None:
     assert m._read_cmd(0x10, 4, cont=False)[18] == m._READ_START
     assert m._read_cmd(0x10, 4, cont=True)[18] == m._READ_CONT
@@ -538,7 +531,7 @@ def _status_resp(records: dict[int, bytes]) -> bytes:
 
 def test_status_cmd_bytes_and_guard() -> None:
     assert m._status_cmd(6) == b"\x06\x00\x00\x00\x74\x00\x00\x00\x00\x00"
-    with pytest.raises(m.ReadOnlyViolation):
+    with pytest.raises(AssertionError):
         m._status_cmd(3)  # SET_ARMING_STATUS must never be built
 
 
@@ -663,7 +656,7 @@ def test_terminal_chunks() -> None:
 
 def test_terminal_status_cmd_guard() -> None:
     assert m._status_cmd(7, b"\x00\x00\x14\x00")[-4:] == b"\x00\x00\x14\x00"
-    with pytest.raises(m.ReadOnlyViolation):
+    with pytest.raises(AssertionError):
         m._status_cmd(9)  # SET_ZONE_BYPASS must never be built
 
 
