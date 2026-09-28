@@ -1,4 +1,4 @@
-"""Unit tests for the read-only TCP 6004 client (no Home Assistant, no socket)."""
+"""Unit tests for the TCP 6004 client's reads (no Home Assistant, no socket)."""
 
 from __future__ import annotations
 

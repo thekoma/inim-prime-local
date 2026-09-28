@@ -74,6 +74,7 @@ _EXPECTED_EXCEPTION_KEYS = {
     "forced_arm_unbypassable_zones",
     "event_log_bad_target",
     "event_log_single_target",
+    "native_command_uncertain",
 }
 
 

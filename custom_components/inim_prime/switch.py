@@ -19,6 +19,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import ApiStatus, InimApiError, InimConnectionError, Output, Zone
+from .commands import async_set_output, async_set_zone_excluded
 from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import (
@@ -129,7 +130,7 @@ class InimOutputSwitch(CoordinatorEntity[InimDataUpdateCoordinator], SwitchEntit
     async def _async_set(self, value: int) -> None:
         """Send a set_output write, translating CODE_NOT_ALLOWED."""
         try:
-            await self.coordinator.client.set_output(self._output_id, value)
+            await async_set_output(self.coordinator, self._output_id, value)
         except InimApiError as err:
             if err.status == ApiStatus.CODE_NOT_ALLOWED:
                 raise HomeAssistantError(
@@ -217,7 +218,7 @@ class InimZoneBypassSwitch(
     async def _async_set_excluded(self, excluded: bool) -> None:
         """Send a set_zone_excluded write, translating failures."""
         try:
-            await self.coordinator.client.set_zone_excluded(self._zone_id, excluded)
+            await async_set_zone_excluded(self.coordinator, self._zone_id, excluded)
         except (InimApiError, InimConnectionError) as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,

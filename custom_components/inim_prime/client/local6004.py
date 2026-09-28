@@ -1,7 +1,7 @@
-"""Read-only client for the INIM PrimeX local protocol (TCP 6004).
+"""Client for the INIM PrimeX local protocol (TCP 6004).
 
-This is a strictly READ-ONLY companion to the cgi HTTP client. What the local
-protocol adds:
+A companion to the cgi HTTP client: read-only by default, with four opt-in
+write commands (see "Write commands" below). What the local protocol adds:
 
 * **static structure** — which partitions, zones, arming scenarios and outputs
   exist, and their labels, read once at setup (see :class:`Local6004Structure`).
@@ -17,13 +17,33 @@ LEN(LE total) | 00 00 | AES-128-CBC ciphertext``. A connection opens with a
 context op-code; reads use op 0x11 (start) / 0x10 (continue) with
 ``[addr:4 LE][0000:4][len:4 LE][len:4 LE][00 00][op][chk=sum(prev19)&0xff]``.
 
-⚠️ READ-ONLY: this module only ever emits the two read opcodes plus the
-read-only *status* commands (op 6 partition statuses, op 7 terminal
-statuses). It never builds a
-write/program frame (a write is the same framing with a write opcode — on a
-production panel a stray write could brick it). ``_read_cmd`` and
-``_status_cmd`` check their opcodes and raise :class:`ReadOnlyViolation`
-(an explicit check, not an ``assert``, so ``python -O`` cannot drop it).
+⚠️ Opcode allow-lists: this module only ever emits the two memory-read
+opcodes, the read-only *status* commands (op 6 partition statuses, op 7
+terminal statuses) and the four *write* commands below. It never builds a
+memory-write/program frame (the same framing with another opcode — on a
+production panel a stray write could brick it). ``_read_cmd``,
+``_status_cmd`` and ``_write_cmd`` each check their opcode against their own
+literal allow-list and raise :class:`OpcodeNotAllowed` otherwise
+(:class:`ReadOnlyViolation` for the read-only ones; an explicit check, not an
+``assert``, so ``python -O`` cannot drop it).
+
+Write commands (same source, not yet live-verified by this project): request
+``[op:4 LE][pin:6][data]``, where the PIN is one digit per byte padded with
+0xFF (``74 00 00 00 00 00`` = no PIN):
+
+* op 3 set arming status: 30 bytes, one per partition, holding the target
+  :class:`AreaMode` (0 = leave that partition alone);
+* op 8 set output: ``[terminal:2 LE][1 on | 0 off:2 LE]``;
+* op 9 set zone bypass: ``[zone:2 LE][0 bypass | 2 unbypass:2 LE]``;
+* op 16 reset partitions (alarm memory): ``[partition bitmask:4 LE]``.
+
+Pitscheider's library does not decode the command response ("complete
+handling of the command response envelope" is listed as not implemented), so
+there is no documented success/failure code. What was observed on a PrimeX
+4.07 for the status commands: the 18-byte response header starts with the
+bitwise NOT of the opcode (uint32 LE), then a constant
+``01 00 ff ff ff 03 00 00 ff ff ff ff ff ff``. A write response is therefore
+only checked for that opcode echo, and its header is logged at debug level.
 
 Live partition status (op 6) follows the command layout documented by
 Pitscheider's inim-prime-native (https://github.com/Pitscheider/inim-prime-native,
@@ -56,14 +76,17 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
 import re
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .const import AreaMode, ZoneState
+
+_LOGGER = logging.getLogger(__name__)
 
 PORT = 6004
 _PREAMBLE = b"\x50\x50"
@@ -111,7 +134,36 @@ STRUCTURE_TIMEOUT = 30.0
 # Failures of a best-effort structure step: that object kind is then unknown.
 _STEP_ERRORS = (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError)
 
-_STATUS_OPS = frozenset({_OP_PARTITION_STATUS, _OP_TERMINAL_STATUS})
+# The only status (read-only command) opcodes ever sent. Literal, so a renamed
+# or mistyped constant above cannot widen it.
+_STATUS_OPS = frozenset({6, 7})
+
+# Write commands (Pitscheider's CommandOperation). Sent only by the
+# async_set_*/async_reset_* methods, which the integration calls only when the
+# user enabled native commands.
+_OP_SET_ARMING = 3
+_OP_SET_OUTPUT = 8
+_OP_SET_ZONE_BYPASS = 9
+_OP_RESET_PARTITIONS = 16
+# The only state-changing opcodes ever sent (literal, see _STATUS_OPS).
+_WRITE_OPS = frozenset({3, 8, 9, 16})
+_PIN_LEN = 6
+_PIN_PAD = 0xFF
+_OUTPUT_ON = 1
+_OUTPUT_OFF = 0
+# Pitscheider: bypass -> 0, un-bypass -> 2 (1 is not used there).
+_BYPASS_ON = 0
+_BYPASS_OFF = 2
+_ZONE_ID_COUNT = 2 * SECOND_HALF_ZONE_OFFSET
+# Bytes of the response header that echo the opcode (as its bitwise NOT).
+_ECHO_LEN = 4
+# Per-command ceiling for a write: a liveness read (itself capped at
+# STATUS_TIMEOUT), an optional live zone pre-check and the write, each of
+# which can take ~4 s on a cold channel. A timeout after the write was sent leaves its outcome unknown, so
+# this is generous.
+COMMAND_TIMEOUT = 15.0
+# I/O failures of one exchange on the persistent connection.
+_IO_ERRORS = (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError)
 
 # Event log (40x): ring of 14-byte records at 0xA1D0.
 _LOG_ADDR = 0xA1D0
@@ -171,6 +223,11 @@ _FACTORY_SCENARIO_RE = re.compile(r"(?:Scenario|SCENARIO)\s+(\d+)")
 
 # Scenario MODO nibble bits -> live AreaMode they require.
 _MODE_BIT = {0x01: "away", 0x02: "stay", 0x04: "disarm"}
+# Only the first 6 MODO bytes of a scenario record are decoded (one nibble per
+# partition), so scene definitions cover partitions 0-11 only. A scenario on a
+# panel with more partitions may target ones this decode does not see.
+_SCENE_MODO_BYTES = 6
+SCENE_DECODED_PARTITIONS = 2 * _SCENE_MODO_BYTES
 _MODE_TO_AREAMODE: dict[str, AreaMode] = {
     "away": AreaMode.TOTAL,
     "stay": AreaMode.PARTIAL,
@@ -218,7 +275,14 @@ def _build_frame(app: bytes, key: bytes, iv: bytes, *, first: bool) -> bytes:
     return bytes(frame)
 
 
-class ReadOnlyViolation(RuntimeError):
+class OpcodeNotAllowed(RuntimeError):
+    """A frame with an opcode outside its allow-list was about to be built.
+
+    Always a programming error: nothing was sent.
+    """
+
+
+class ReadOnlyViolation(OpcodeNotAllowed):
     """A frame other than a read or a read-only status command was about to be built."""
 
 
@@ -242,6 +306,82 @@ def _status_cmd(op: int, data: bytes = b"") -> bytes:
     if op not in _STATUS_OPS:
         raise ReadOnlyViolation(f"status opcode {op}")
     return op.to_bytes(4, "little") + _NO_PIN + data
+
+
+def encode_pin(pin: str | None) -> bytes:
+    """Encode a user PIN as the command's 6-byte PIN field.
+
+    One digit per byte, padded with 0xFF; None is the "no PIN" marker the
+    read-only status commands also send.
+    """
+    if pin is None:
+        return _NO_PIN
+    if not (pin.isascii() and pin.isdigit() and 1 <= len(pin) <= _PIN_LEN):
+        raise ValueError("PIN must be 1-6 ASCII digits")
+    return bytes(int(d) for d in pin).ljust(_PIN_LEN, bytes([_PIN_PAD]))
+
+
+def _write_cmd(op: int, data: bytes, pin: str | None = None) -> bytes:
+    """Build a write command body: ``[op:4 LE][pin:6][data]``."""
+    if op not in _WRITE_OPS:
+        raise OpcodeNotAllowed(f"write opcode {op}")
+    return op.to_bytes(4, "little") + encode_pin(pin) + data
+
+
+def _check_area_id(area_id: int) -> None:
+    if not 0 <= area_id < _PARTITION_COUNT:
+        raise ValueError(f"partition id {area_id} out of range")
+
+
+def arming_data(modes: Mapping[int, AreaMode]) -> bytes:
+    """Encode op 3 data: the target mode per partition, 0 = leave it alone."""
+    if not modes:
+        raise ValueError("no partitions to set")
+    data = bytearray(_PARTITION_COUNT)
+    for area_id, mode in modes.items():
+        _check_area_id(area_id)
+        data[area_id] = AreaMode(mode)
+    return bytes(data)
+
+
+def reset_data(area_ids: Iterable[int]) -> bytes:
+    """Encode op 16 data: the uint32 LE bitmask of partitions to reset."""
+    mask = 0
+    for area_id in area_ids:
+        _check_area_id(area_id)
+        mask |= 1 << area_id
+    if not mask:
+        raise ValueError("no partitions to reset")
+    return mask.to_bytes(4, "little")
+
+
+def zone_bypass_data(zone_id: int, excluded: bool) -> bytes:
+    """Encode op 9 data: ``[zone:2 LE][0 bypass | 2 unbypass:2 LE]``."""
+    if not 0 <= zone_id < _ZONE_ID_COUNT:
+        raise ValueError(f"zone id {zone_id} out of range")
+    value = _BYPASS_ON if excluded else _BYPASS_OFF
+    return zone_id.to_bytes(2, "little") + value.to_bytes(2, "little")
+
+
+def output_data(terminal: int, on: bool) -> bytes:
+    """Encode op 8 data: ``[terminal:2 LE][1 on | 0 off:2 LE]``."""
+    if terminal not in _OUTPUT_TERMINALS:
+        raise ValueError(f"output terminal {terminal} out of range")
+    value = _OUTPUT_ON if on else _OUTPUT_OFF
+    return terminal.to_bytes(2, "little") + value.to_bytes(2, "little")
+
+
+def check_command_response(op: int, resp: bytes) -> None:
+    """Raise :class:`NativeCommandRejected` unless ``resp`` echoes ``op``.
+
+    The echo (bitwise NOT of the opcode) is the only part of the response
+    header whose meaning is known; see the module docstring.
+    """
+    echo = (~op & 0xFFFFFFFF).to_bytes(_ECHO_LEN, "little")
+    if resp[:_ECHO_LEN] != echo:
+        raise NativeCommandRejected(
+            op, f"unexpected response header {resp[:_STATUS_HEADER].hex(' ') or 'empty'}"
+        )
 
 
 def zone_terminal(zone_id: int) -> tuple[int, int]:
@@ -544,6 +684,22 @@ def scene_is_active(arms: dict[int, str], areas_by_id: dict[int, AreaMode]) -> b
     return True
 
 
+def scene_target_modes(arms: dict[int, str]) -> dict[int, AreaMode] | None:
+    """Return a scene's targets as ``{partition: AreaMode}``.
+
+    None unless every target maps cleanly (away -> TOTAL, stay -> PARTIAL,
+    disarm -> DISARMED): a combined or unknown nibble has no single mode, and
+    a scene with no targets sets nothing.
+    """
+    modes: dict[int, AreaMode] = {}
+    for pidx, mode in arms.items():
+        want = _MODE_TO_AREAMODE.get(mode)
+        if want is None:
+            return None
+        modes[pidx] = want
+    return modes or None
+
+
 def decode_event_log(
     blob: bytes,
     area_labels: dict[int, str] | None = None,
@@ -585,8 +741,72 @@ class Local6004Error(Exception):
     """Any failure talking the local 6004 protocol (connect/read/decrypt)."""
 
 
+class NativeCommandError(Local6004Error):
+    """A native write command failed; see the subclasses for what is known."""
+
+    def __init__(self, op: int, detail: str) -> None:
+        self.op = op
+        super().__init__(f"native command {op}: {detail}")
+
+
+class NativeCommandNotSent(NativeCommandError):
+    """The command certainly never left: nothing was written to the panel.
+
+    Raised only for failures before the command frame was handed to the
+    socket (e.g. the connection could not be opened), so retrying it on
+    another channel cannot execute it twice.
+    """
+
+
+class NativeCommandInvalid(NativeCommandNotSent):
+    """The client refused the arguments (id out of range, bad PIN); nothing sent."""
+
+
+class NativeZonesNotReady(NativeCommandNotSent):
+    """The live pre-check found a zone of the target areas not ready; nothing sent."""
+
+
+class NativeCommandUncertain(NativeCommandError):
+    """The command was sent, but its outcome is unknown.
+
+    It may have been executed (e.g. a timeout or a dropped connection while
+    waiting for the answer), so it must not be retried blindly.
+    """
+
+
+class NativeCommandRejected(NativeCommandUncertain):
+    """The panel answered, but not with the expected opcode echo.
+
+    Whether the panel executed the command is not known (the response codes
+    are undocumented), so this is treated as uncertain as well.
+    """
+
+
+def _validated(op: int, build: Callable[[], bytes]) -> bytes:
+    """Run a frame builder, turning its argument errors into NativeCommandInvalid.
+
+    Only argument checks raise ValueError here, before any connection is
+    touched, so the caller may safely use another channel instead.
+    """
+    try:
+        return build()
+    except ValueError as err:
+        raise NativeCommandInvalid(op, str(err)) from err
+
+
+class _Progress:
+    """Whether a command frame was handed to the socket (survives a timeout)."""
+
+    sent = False
+
+
 class Local6004Client:
-    """Async, strictly read-only client for the panel's TCP 6004 protocol."""
+    """Async client for the panel's TCP 6004 protocol.
+
+    Read-only unless one of the write methods (``async_set_area_modes``,
+    ``async_set_zone_bypass``, ``async_set_output``, ``async_reset_areas``) is
+    called.
+    """
 
     def __init__(self, host: str, password: str, *, port: int = PORT, timeout: float = 10.0):
         self._host = host
@@ -637,10 +857,140 @@ class Local6004Client:
         reader, writer = self._status_conn
         return await self._xfer(reader, writer, body, first=True)
 
+    # ------------------------------------------------------------ write commands
+    async def async_set_area_modes(
+        self,
+        modes: Mapping[int, AreaMode],
+        *,
+        require_ready: Collection[int] = (),
+        pin: str | None = None,
+        timeout: float = COMMAND_TIMEOUT,
+    ) -> None:
+        """Set several partitions' arming modes in one command (op 3).
+
+        Partitions not in ``modes`` are left alone, so this also applies an
+        arming scenario's targets at once.
+
+        ``require_ready`` zones are read live in the same locked exchange,
+        right before sending: if one is neither ready nor bypassed (or not
+        reported), :class:`NativeZonesNotReady` is raised and nothing is
+        sent. How the panel treats a native arm with open zones is unknown.
+        """
+        data = _validated(_OP_SET_ARMING, lambda: arming_data(modes))
+        await self._command(_OP_SET_ARMING, data, pin, timeout, set(require_ready))
+
+    async def async_set_zone_bypass(
+        self,
+        zone_id: int,
+        excluded: bool,
+        *,
+        pin: str | None = None,
+        timeout: float = COMMAND_TIMEOUT,
+    ) -> None:
+        """Bypass (exclude) or un-bypass a zone (op 9)."""
+        data = _validated(_OP_SET_ZONE_BYPASS, lambda: zone_bypass_data(zone_id, excluded))
+        await self._command(_OP_SET_ZONE_BYPASS, data, pin, timeout)
+
+    async def async_set_output(
+        self,
+        terminal: int,
+        on: bool,
+        *,
+        pin: str | None = None,
+        timeout: float = COMMAND_TIMEOUT,
+    ) -> None:
+        """Turn a panel output (terminal 1005..1009) on or off (op 8)."""
+        data = _validated(_OP_SET_OUTPUT, lambda: output_data(terminal, on))
+        await self._command(_OP_SET_OUTPUT, data, pin, timeout)
+
+    async def async_reset_areas(
+        self,
+        area_ids: Iterable[int],
+        *,
+        pin: str | None = None,
+        timeout: float = COMMAND_TIMEOUT,
+    ) -> None:
+        """Reset the partitions' alarm memory (op 16)."""
+        data = _validated(_OP_RESET_PARTITIONS, lambda: reset_data(area_ids))
+        await self._command(_OP_RESET_PARTITIONS, data, pin, timeout)
+
+    async def _command(
+        self,
+        op: int,
+        data: bytes,
+        pin: str | None,
+        timeout: float,
+        require_ready: set[int] | None = None,
+    ) -> None:
+        """Send one write command over the persistent connection, once.
+
+        Never retried here. A failure raises :class:`NativeCommandNotSent` (or
+        a subclass) when the frame was never handed to the socket, and
+        :class:`NativeCommandUncertain` (or its subclass
+        :class:`NativeCommandRejected`) once it may have reached the panel.
+        """
+        body = _validated(op, lambda: _write_cmd(op, data, pin))
+        progress = _Progress()
+        async with self._status_lock:
+            try:
+                resp = await asyncio.wait_for(
+                    self._send_command(op, body, progress, require_ready or set()), timeout
+                )
+            except _IO_ERRORS as err:
+                await self._close_status_conn()
+                detail = str(err) or type(err).__name__
+                if progress.sent:
+                    raise NativeCommandUncertain(op, detail) from err
+                raise NativeCommandNotSent(op, detail) from err
+            except asyncio.CancelledError:
+                # A cancelled exchange leaves the stream mid-frame.
+                self._drop_status_conn()
+                raise
+        _LOGGER.debug("Native command %d answered %s", op, resp[:_STATUS_HEADER].hex(" "))
+        check_command_response(op, resp)
+
+    async def _send_command(
+        self, op: int, body: bytes, progress: _Progress, require_ready: set[int]
+    ) -> bytes:
+        if self._status_conn is not None:
+            # Prove the kept-open connection is alive with a read-only status
+            # read first: a write into a connection the panel already dropped
+            # would leave its outcome unknown, a failed read is harmless.
+            # Bounded on its own, so a stalled connection is replaced while
+            # the command budget still covers a reconnect and the write.
+            try:
+                await asyncio.wait_for(
+                    self._status(_status_cmd(_OP_PARTITION_STATUS)), STATUS_TIMEOUT
+                )
+            except _IO_ERRORS:
+                await self._close_status_conn()
+        if self._status_conn is None:
+            self._status_conn = await asyncio.open_connection(self._host, self._port)
+        if require_ready:
+            live = await self._get_zone_statuses(require_ready)
+            blocked = sorted(
+                zone_id
+                for zone_id in require_ready
+                if (status := live.get(zone_id)) is None
+                or not (status.excluded or status.state is ZoneState.READY)
+            )
+            if blocked:
+                raise NativeZonesNotReady(op, f"zones not ready: {blocked}")
+        reader, writer = self._status_conn
+        # From here on the panel may receive the command.
+        progress.sent = True
+        return await self._xfer(reader, writer, body, first=True)
+
     async def async_close(self) -> None:
         """Close the persistent status connection, if open."""
         async with self._status_lock:
             await self._close_status_conn()
+
+    def _drop_status_conn(self) -> None:
+        """Forget the persistent connection and close it without waiting."""
+        if self._status_conn is not None:
+            self._status_conn[1].close()
+            self._status_conn = None
 
     async def _close_status_conn(self) -> None:
         if self._status_conn is None:
@@ -705,7 +1055,7 @@ class Local6004Client:
         )
         scenes = []
         for sid in range(_SCENARIO_COUNT):
-            rec = modi[sid * _SCENARIO_MODI_REC : sid * _SCENARIO_MODI_REC + 6]
+            rec = modi[sid * _SCENARIO_MODI_REC : sid * _SCENARIO_MODI_REC + _SCENE_MODO_BYTES]
             arms = decode_scene(rec)
             if arms:  # skip undefined scenarios
                 scenes.append(SceneDef(id=sid, arms=arms))

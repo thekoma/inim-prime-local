@@ -17,9 +17,11 @@ from .const import (
     CONF_APIKEY,
     CONF_LOCAL_PASSWORD,
     CONF_NATIVE_AREA_POLL,
+    CONF_NATIVE_COMMANDS,
     CONF_USE_HTTPS,
     CONF_WEBHOOK_ENABLED,
     DEFAULT_NATIVE_AREA_POLL,
+    DEFAULT_NATIVE_COMMANDS,
     DEFAULT_PORT,
     DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_USE_HTTPS,
@@ -81,9 +83,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
     if entry.options.get(CONF_WEBHOOK_ENABLED):
         async_register_webhook(hass, entry)
 
-    if entry.options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL):
-        # Fast area state over the native read-only status command. The
-        # persistent connection is closed on unload.
+    native_poll = entry.options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL)
+    native_commands = entry.options.get(CONF_NATIVE_COMMANDS, DEFAULT_NATIVE_COMMANDS)
+    if native_commands:
+        # Opt-in native write commands (cgi fallback only when never sent).
+        coordinator.command_client = local_client
+        if not native_poll:
+            LOGGER.info(
+                "Native commands are on without fast area and zone polling: after a"
+                " native command the state is only refreshed by the slower cgi poll"
+            )
+    if native_poll or native_commands:
+        # Both share the persistent connection: close it on unload.
+        entry.async_on_unload(local_client.async_close)
+    if native_poll:
+        # Fast area state over the native read-only status command.
         coordinator.async_attach_native(local_client)
         entry.async_on_unload(
             async_track_time_interval(
@@ -94,7 +108,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
                 cancel_on_shutdown=True,
             )
         )
-        entry.async_on_unload(local_client.async_close)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

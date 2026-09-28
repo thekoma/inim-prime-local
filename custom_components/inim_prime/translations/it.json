@@ -65,12 +65,14 @@
           "webhook_enabled": "Abilita push realtime (webhook locale)",
           "label_language": "Lingua dei nomi zona (per le icone)",
           "group_by_room": "Raggruppa le zone per stanza",
-          "native_area_poll": "Polling veloce di aree e zone (protocollo nativo)"
+          "native_area_poll": "Polling veloce di aree e zone (protocollo nativo)",
+          "native_commands": "Comandi nativi (inserimento/disinserimento, bypass, uscite) — sperimentale"
         },
         "data_description": {
           "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant.",
           "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant.",
-          "native_area_poll": "Legge lo stato di inserimento di ogni area e lo stato di ogni zona ogni 2 secondi tramite il protocollo nativo TCP 6004 del pannello (sola lettura, ~10 ms a lettura). Il polling cgi più lento continua per tutto il resto."
+          "native_area_poll": "Legge lo stato di inserimento di ogni area e lo stato di ogni zona ogni 2 secondi tramite il protocollo nativo TCP 6004 del pannello (sola lettura, ~10 ms a lettura). Il polling cgi più lento continua per tutto il resto.",
+          "native_commands": "Invia inserimento/disinserimento, scenari, bypass zone, uscite e reset della memoria allarme tramite il protocollo nativo TCP 6004 del pannello invece della cgi. Disattivato di default: questi comandi non sono ancora stati verificati su una centrale reale, quindi provali prima (vedi docs/native-commands.md) e disattiva l'opzione per tornare alla cgi. Un comando viene ripetuto tramite la cgi solo se di sicuro non ha mai raggiunto la centrale."
         }
       }
     }
@@ -182,6 +184,9 @@
     },
     "event_log_single_target": {
       "message": "Leggi registro eventi accetta esattamente un'entità target."
+    },
+    "native_command_uncertain": {
+      "message": "Il comando nativo potrebbe aver raggiunto la centrale, ma l'esito è sconosciuto ({error}). Non è stato ripetuto; controlla lo stato della centrale prima di riprovare."
     }
   },
   "selector": {

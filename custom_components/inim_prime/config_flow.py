@@ -40,6 +40,7 @@ from .const import (
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
     CONF_NATIVE_AREA_POLL,
+    CONF_NATIVE_COMMANDS,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
@@ -49,6 +50,7 @@ from .const import (
     DEFAULT_LOCAL_PASSWORD,
     DEFAULT_NAME,
     DEFAULT_NATIVE_AREA_POLL,
+    DEFAULT_NATIVE_COMMANDS,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     DEFAULT_SCAN_INTERVAL_IDLE,
@@ -308,6 +310,10 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                     vol.Required(
                         CONF_NATIVE_AREA_POLL,
                         default=options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL),
+                    ): bool,
+                    vol.Required(
+                        CONF_NATIVE_COMMANDS,
+                        default=options.get(CONF_NATIVE_COMMANDS, DEFAULT_NATIVE_COMMANDS),
                     ): bool,
                 }
             ),

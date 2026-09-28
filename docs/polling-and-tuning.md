@@ -58,6 +58,8 @@ When the native read sees a change, entities update immediately. An **area** cha
 
 Each status read has a 5 s ceiling (cold reads after the channel sat idle were measured at 3.4–4 s). If a read is still running when the next 2 s tick fires, that tick is skipped rather than queued behind it, so a slow panel never builds a backlog of native reads.
 
+With the experimental **Native commands** option on, writes share this persistent connection and its lock, and after a native write the state is re-read natively at once (see [native-commands.md](native-commands.md)).
+
 Native failures never mark entities unavailable: after 3 consecutive failures the native poll backs off to every ~30 s, the cgi poll returns to the idle interval, and availability stays driven by the cgi poll. Disable it with **Fast area and zone polling (native protocol)** in the options.
 
 ## Native structure (read once at setup)
