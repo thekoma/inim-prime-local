@@ -24,11 +24,10 @@ from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import (
     group_zones_by_room,
-    label_language,
     panel_device_info,
+    resolve_room,
     room_device_info,
 )
-from .room_guess import guess_room
 
 # Output/bypass toggles issue panel writes; the cgi is single-threaded, so
 # serialize commands to one in flight at a time.
@@ -184,7 +183,7 @@ class InimZoneBypassSwitch(
         if group_zones_by_room(coordinator):
             zone = self._zone
             if zone is not None:
-                room = guess_room(zone.label, label_language(coordinator))
+                room = resolve_room(coordinator, zone.label)
                 if room is not None:
                     self._attr_device_info = room_device_info(coordinator, room)
 

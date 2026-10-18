@@ -9,11 +9,15 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .const import (
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
+    CONF_ROOM_OVERRIDES,
     DEFAULT_GROUP_BY_ROOM,
+    DEFAULT_ROOM_OVERRIDES,
     DOMAIN,
     LABEL_LANGUAGE_AUTO,
 )
 from .coordinator import InimDataUpdateCoordinator
+from .room_guess import guess_room
+from .zone_guess import _fold
 
 
 def panel_device_info(coordinator: InimDataUpdateCoordinator) -> DeviceInfo:
@@ -87,6 +91,45 @@ def room_device_info(
     return DeviceInfo(
         identifiers={(DOMAIN, f"{entry.entry_id}_room_{_room_slug(room)}")},
         name=room,
+        suggested_area=room,
         manufacturer="INIM",
         via_device=(DOMAIN, entry.entry_id),
     )
+
+
+def parse_room_overrides(text: str) -> list[tuple[str, str]]:
+    """Parse the room-override option into ordered ``(folded_pattern, room)`` pairs.
+
+    Each non-empty, non-``#`` line is ``pattern = room``; the pattern is matched
+    accent- and case-insensitively as a substring of the zone label. Order is
+    preserved, so the first matching line wins (list the most specific first).
+    """
+    pairs: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        pattern, _, room = line.partition("=")
+        folded = _fold(pattern.strip())
+        room = room.strip()
+        if folded and room:
+            pairs.append((folded, room))
+    return pairs
+
+
+def apply_room_overrides(label: str, overrides: list[tuple[str, str]]) -> str | None:
+    """Return the overridden room for ``label``, or None when no override matches."""
+    folded = _fold(label)
+    for pattern, room in overrides:
+        if pattern in folded:
+            return room
+    return None
+
+
+def resolve_room(coordinator: InimDataUpdateCoordinator, label: str) -> str | None:
+    """Resolve a zone's room: user overrides first, then the label-based guess."""
+    raw = coordinator.config_entry.options.get(CONF_ROOM_OVERRIDES, DEFAULT_ROOM_OVERRIDES)
+    override = apply_room_overrides(label, parse_room_overrides(raw if isinstance(raw, str) else ""))
+    if override is not None:
+        return override
+    return guess_room(label, label_language(coordinator))

@@ -20,9 +20,9 @@ from .device import (
     group_zones_by_room,
     label_language,
     panel_device_info,
+    resolve_room,
     room_device_info,
 )
-from .room_guess import guess_room
 from .zone_guess import guess_device_class
 
 # Read-only platform: all state comes from the coordinator, no panel writes,
@@ -111,7 +111,7 @@ class InimZoneBinarySensor(InimBaseBinarySensor):
             # Group the zone under a per-room device when enabled and a room is
             # recognised in the label; otherwise it stays on the panel device.
             if group_zones_by_room(coordinator):
-                room = guess_room(zone.label, language)
+                room = resolve_room(coordinator, zone.label)
                 if room is not None:
                     self._attr_device_info = room_device_info(coordinator, room)
         else:

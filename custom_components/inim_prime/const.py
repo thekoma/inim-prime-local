@@ -56,6 +56,13 @@ LABEL_LANGUAGE_AUTO: Final = "auto"
 CONF_GROUP_BY_ROOM: Final = "group_by_room"
 DEFAULT_GROUP_BY_ROOM: Final = True
 
+# Optional per-label room overrides: lines "pattern = room", matched (accent- and
+# case-insensitive substring) against the zone label before the label-based guess,
+# first match wins. Lets a zone whose label still names an old/renamed room be
+# attributed to the correct Home Assistant room.
+CONF_ROOM_OVERRIDES: Final = "room_overrides"
+DEFAULT_ROOM_OVERRIDES: Final = ""
+
 # Fast area-state polling over the native TCP 6004 status command (~10 ms per
 # read, vs seconds for the cgi on a loaded panel). The cgi poll stays on as
 # the full-state reconciliation path.

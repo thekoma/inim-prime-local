@@ -41,6 +41,7 @@ from .const import (
     CONF_LOCAL_PASSWORD,
     CONF_NATIVE_AREA_POLL,
     CONF_NATIVE_COMMANDS,
+    CONF_ROOM_OVERRIDES,
     CONF_SCAN_INTERVAL_ACTIVE,
     CONF_SCAN_INTERVAL_IDLE,
     CONF_USE_HTTPS,
@@ -52,6 +53,7 @@ from .const import (
     DEFAULT_NATIVE_AREA_POLL,
     DEFAULT_NATIVE_COMMANDS,
     DEFAULT_PORT,
+    DEFAULT_ROOM_OVERRIDES,
     DEFAULT_SCAN_INTERVAL_ACTIVE,
     DEFAULT_SCAN_INTERVAL_IDLE,
     DEFAULT_USE_HTTPS,
@@ -306,6 +308,12 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                         CONF_GROUP_BY_ROOM,
                         default=options.get(CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM),
                     ): bool,
+                    vol.Optional(
+                        CONF_ROOM_OVERRIDES,
+                        default=options.get(CONF_ROOM_OVERRIDES, DEFAULT_ROOM_OVERRIDES),
+                    ): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True)
+                    ),
                     vol.Required(
                         CONF_NATIVE_AREA_POLL,
                         default=options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL),
