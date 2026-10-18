@@ -14,7 +14,7 @@
         },
         "data_description": {
           "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\").",
-          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Required: read over the local protocol (TCP 6004) for multi-active scenes and the precise model. PrimeX 4.x firmware only."
+          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Required: read over the local protocol (TCP 6004) for multi-active scenes and the precise model. PrimeX/Prime 4.x and 5.00 are supported natively; other firmware runs cgi-only (areas, zones, scenarios, outputs and states only)."
         }
       },
       "reauth_confirm": {
@@ -37,7 +37,7 @@
         },
         "data_description": {
           "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\").",
-          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Required: read over the local protocol (TCP 6004) for multi-active scenes and the precise model. PrimeX 4.x firmware only."
+          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Required: read over the local protocol (TCP 6004) for multi-active scenes and the precise model. PrimeX/Prime 4.x and 5.00 are supported natively; other firmware runs cgi-only (areas, zones, scenarios, outputs and states only)."
         }
       }
     },
@@ -45,7 +45,6 @@
       "invalid_auth": "Invalid API key.",
       "cannot_connect": "Failed to connect to the panel.",
       "local_cannot_connect": "Could not reach the panel's local protocol (TCP 6004). Check the LAN password and that the panel is reachable.",
-      "local_unsupported_firmware": "This panel's firmware is not a supported PrimeX 4.x layout.",
       "unknown": "Unexpected error."
     },
     "abort": {

@@ -87,19 +87,19 @@ async def test_user_flow_local_cannot_connect(hass: HomeAssistant, patch_client:
     assert result["errors"] == {"base": "local_cannot_connect"}
 
 
-async def test_user_flow_local_unsupported_firmware(
+async def test_user_flow_unknown_layout_creates_entry(
     hass: HomeAssistant, patch_client: AsyncMock
 ) -> None:
-    """A non-4.x panel firmware surfaces local_unsupported_firmware."""
+    """A reachable panel whose native layout is not mapped (e.g. a future 6.x) is accepted."""
     with patch("custom_components.inim_prime.config_flow.Local6004Client") as cls:
         cls.return_value.async_read_config = AsyncMock(
-            return_value=Local6004Config(firmware="3.10 PRIME", layout_ok=False)
+            return_value=Local6004Config(firmware="6.00 PX020", layout_ok=False)
         )
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
         result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+        await hass.async_block_till_done()
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "local_unsupported_firmware"}
+    assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
 async def test_user_flow_cannot_connect(hass: HomeAssistant, patch_client: AsyncMock) -> None:

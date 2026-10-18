@@ -151,6 +151,7 @@ The panel API is plaintext HTTP on your LAN and the API key is a bearer token. T
 | Panel | Status |
 |---|---|
 | INIM **PrimeX** (firmware 4.07) | ✅ Primary development hardware |
+| INIM **PrimeX / Prime** (firmware 5.00) | ✅ Native: live area/zone status, scenes, correct output and scenario names, and native commands all work. Two tables moved in 5.00 and are not mapped yet, so the **zone→area** map and the **event log** fall back (zones come from the cgi; the event log is unavailable) |
 | INIM **Prime** with PrimeLAN board | ✅ Same local HTTP API — expected to work |
 
 SmartLiving / Nexus panels use a different protocol and are **not** covered here (see Alternatives).

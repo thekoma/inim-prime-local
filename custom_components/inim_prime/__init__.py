@@ -67,12 +67,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
 
     coordinator = InimDataUpdateCoordinator(hass, entry, client)
 
-    # Read-only local (TCP 6004) is MANDATORY: read the static structure and
-    # scenario definitions once (which objects exist and their labels,
-    # multi-active scenes, zone->area, precise model). A failure aborts setup —
-    # there is no cgi-only fallback by design. It runs before the first cgi
-    # refresh so the first snapshot, and so every entity, already uses the
-    # native structure.
+    # Read-only local (TCP 6004): read the static structure and scenario
+    # definitions once (which objects exist and their labels, multi-active
+    # scenes, zone->area, precise model). The channel must be reachable (a
+    # failure aborts setup); a firmware whose layout is not mapped yet degrades
+    # to cgi-only. It runs before the first cgi refresh so the first snapshot,
+    # and so every entity, already uses the native structure when available.
     local_client = await _async_setup_local(hass, entry, coordinator)
     await coordinator.async_config_entry_first_refresh()
 
@@ -85,29 +85,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
 
     native_poll = entry.options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL)
     native_commands = entry.options.get(CONF_NATIVE_COMMANDS, DEFAULT_NATIVE_COMMANDS)
-    if native_commands:
-        # Opt-in native write commands (cgi fallback only when never sent).
-        coordinator.command_client = local_client
-        if not native_poll:
-            LOGGER.info(
-                "Native commands are on without fast area and zone polling: after a"
-                " native command the state is only refreshed by the slower cgi poll"
+    if local_client is None:
+        if native_poll or native_commands:
+            LOGGER.warning(
+                "Native area polling and native commands are off on this panel: its"
+                " firmware is not supported over the native channel yet, so states and"
+                " commands go over the cgi"
             )
-    if native_poll or native_commands:
-        # Both share the persistent connection: close it on unload.
-        entry.async_on_unload(local_client.async_close)
-    if native_poll:
-        # Fast area state over the native read-only status command.
-        coordinator.async_attach_native(local_client)
-        entry.async_on_unload(
-            async_track_time_interval(
-                hass,
-                coordinator.async_native_poll,
-                timedelta(seconds=NATIVE_AREA_POLL_INTERVAL),
-                name="inim_prime native poll",
-                cancel_on_shutdown=True,
+    else:
+        if native_commands:
+            # Opt-in native write commands (cgi fallback only when never sent).
+            coordinator.command_client = local_client
+            if not native_poll:
+                LOGGER.info(
+                    "Native commands are on without fast area and zone polling: after a"
+                    " native command the state is only refreshed by the slower cgi poll"
+                )
+        if native_poll or native_commands:
+            # Both share the persistent connection: close it on unload.
+            entry.async_on_unload(local_client.async_close)
+        if native_poll:
+            # Fast area state over the native read-only status command.
+            coordinator.async_attach_native(local_client)
+            entry.async_on_unload(
+                async_track_time_interval(
+                    hass,
+                    coordinator.async_native_poll,
+                    timedelta(seconds=NATIVE_AREA_POLL_INTERVAL),
+                    name="inim_prime native poll",
+                    cancel_on_shutdown=True,
+                )
             )
-        )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -118,13 +126,15 @@ async def _async_setup_local(
     hass: HomeAssistant,
     entry: InimConfigEntry,
     coordinator: InimDataUpdateCoordinator,
-) -> Local6004Client:
-    """Read the static config over TCP 6004 once (read-only). MANDATORY.
+) -> Local6004Client | None:
+    """Read the static config over TCP 6004 once (read-only).
 
     The LAN password lives in entry.data (fallback: legacy entries that stored it
-    in options). A connection/auth failure raises ConfigEntryNotReady (HA retries);
-    an unsupported (non-4.x) firmware raises ConfigEntryError. There is no
-    cgi-only fallback — the local channel is required.
+    in options). A connection/auth failure raises ConfigEntryNotReady (HA retries).
+    A firmware whose native config layout is not mapped (anything but 4.x, e.g.
+    the 5.00 released in 2026) is not an error: the integration then runs
+    cgi-only (structure, states and commands from the cgi; no multi-active
+    scenes, native outputs, fast polling or native commands) and returns None.
     """
     password = entry.data.get(CONF_LOCAL_PASSWORD) or entry.options.get(CONF_LOCAL_PASSWORD)
     if not password:
@@ -141,9 +151,14 @@ async def _async_setup_local(
     except Local6004Error as err:
         raise ConfigEntryNotReady(f"Local 6004 channel unreachable: {err}") from err
     if not config.layout_ok:
-        raise ConfigEntryError(
-            f"Panel firmware '{config.firmware}' is not a supported PrimeX 4.x layout."
+        LOGGER.warning(
+            "Panel firmware '%s' is not supported over the native channel yet: running"
+            " cgi-only (no multi-active scenes, native outputs, fast polling or native"
+            " commands)",
+            config.firmware,
         )
+        coordinator.local_config = None
+        return None
     coordinator.local_config = config
     structure = config.structure
     missing = [

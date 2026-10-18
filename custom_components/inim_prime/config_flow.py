@@ -101,12 +101,11 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                 port=LOCAL_6004_PORT,
             )
             try:
-                config = await local.async_read_config()
+                await local.async_read_config()
             except Local6004Error:
                 errors["base"] = "local_cannot_connect"
-            else:
-                if not config.layout_ok:
-                    errors["base"] = "local_unsupported_firmware"
+            # A firmware whose native layout is not mapped is not an error here:
+            # setup then runs cgi-only (see _async_setup_local).
 
         return errors
 

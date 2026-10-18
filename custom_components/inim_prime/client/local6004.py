@@ -70,6 +70,18 @@ The EEPROM config offsets below are the **40x** layout (PrimeX firmware 4.x),
 which is a compile-time-constant memory map in the official client. They are
 NOT valid for other firmware families, so callers must gate on the firmware
 major version (see :attr:`Local6004Config.layout_ok`).
+
+Firmware 5.00 (PrimeX/Prime, verified read-only on a live panel in October
+2026) keeps the framing, the crypto, the version read and the live status and
+write commands, but answers with the ``50 54`` preamble and moves most config
+tables. Its map is :data:`_LAYOUT_50X`: area and zone label tables are
+unchanged, the scenario-mode, scenario-label and output-label tables moved, and
+the half-B zone id and the output terminals shifted from ``+1005`` to ``+1505``
+(zone ids 1005+ are the new CoreSync video zones). The zone->area settings and
+the event-log offsets are not mapped for 5.x yet, so those two degrade (cgi
+zones, no event log) while scenes, labels, live status and commands work. A
+firmware whose major digit is not in :data:`_LAYOUTS` is read for its version
+only (``layout_ok=False``) and the caller then runs cgi-only.
 """
 
 from __future__ import annotations
@@ -90,6 +102,9 @@ _LOGGER = logging.getLogger(__name__)
 
 PORT = 6004
 _PREAMBLE = b"\x50\x50"
+# Response preambles seen on live panels: ``50 50`` on firmware 4.x, ``50 54``
+# on firmware 5.00 (same framing, crypto and commands otherwise).
+_RESPONSE_PREAMBLES = frozenset({b"\x50\x50", b"\x50\x54"})
 _READ_START = 0x11
 _READ_CONT = 0x10
 # The only memory opcodes ever sent (literal, independent of the names above).
@@ -216,6 +231,68 @@ _AREA_LABELS_ADDR = 0x14030D20
 _ZONE_LABELS_ADDR = 0x14030F00
 _SCENARIO_LABELS_ADDR = 0x1403D8E0
 _OUTPUT_LABELS_ADDR = 0x1403DEB0
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """Firmware-family memory map for the config tables (base 0x14000000).
+
+    The live status/command opcodes and the version read are identical across
+    families; only the EEPROM offsets, the half-B zone id offset and the
+    output-terminal range differ. ``zone_cfg`` / ``log_addr`` are ``None`` when
+    that table's offset is not mapped for the family yet: the zone->area map and
+    the event log are then unavailable, while the rest of the native channel
+    (live area/zone status, scenes, labels, write commands) still works.
+    """
+
+    name: str
+    scenario_modi: int
+    area_labels: int
+    zone_labels: int
+    scenario_labels: int
+    output_labels: int
+    half_offset: int
+    terminal_count: int
+    zone_cfg: int | None
+    log_addr: int | None
+
+    @property
+    def output_terminals(self) -> range:
+        return range(self.half_offset, self.terminal_count)
+
+
+_LAYOUT_40X = _Layout(
+    name="40x",
+    scenario_modi=_SCENARIO_MODI_ADDR,
+    area_labels=_AREA_LABELS_ADDR,
+    zone_labels=_ZONE_LABELS_ADDR,
+    scenario_labels=_SCENARIO_LABELS_ADDR,
+    output_labels=_OUTPUT_LABELS_ADDR,
+    half_offset=1005,
+    terminal_count=1010,
+    zone_cfg=_ZONE_CFG_ADDR,
+    log_addr=_LOG_ADDR,
+)
+# 50x (PrimeX/Prime firmware 5.00): verified read-only on a live panel in Oct
+# 2026. Area and zone label tables are unchanged; the scenario-mode,
+# scenario-label and output-label tables moved, and the half-B zone id and the
+# output terminals shifted by +500. The zone-settings (zone->area) and event-log
+# 5.x offsets are not mapped yet, so both are None and degrade on their own.
+_LAYOUT_50X = _Layout(
+    name="50x",
+    scenario_modi=0x14099368,
+    area_labels=_AREA_LABELS_ADDR,
+    zone_labels=_ZONE_LABELS_ADDR,
+    scenario_labels=0x14041760,
+    output_labels=0x14041D30,
+    half_offset=1505,
+    terminal_count=1510,
+    zone_cfg=None,
+    log_addr=None,
+)
+# Panel firmware major digit -> memory map. A firmware not listed is read for its
+# version only (layout_ok False) and the integration then runs cgi-only.
+_LAYOUTS: dict[str, _Layout] = {"4": _LAYOUT_40X, "5": _LAYOUT_50X}
 
 # Factory-default scenario names carry their 1-based index: "Scenario 10" or
 # "SCENARIO   031". Unused scenarios keep them; the cgi does not list those.
@@ -363,9 +440,11 @@ def zone_bypass_data(zone_id: int, excluded: bool) -> bytes:
     return zone_id.to_bytes(2, "little") + value.to_bytes(2, "little")
 
 
-def output_data(terminal: int, on: bool) -> bytes:
+def output_data(
+    terminal: int, on: bool, output_terminals: range = _OUTPUT_TERMINALS
+) -> bytes:
     """Encode op 8 data: ``[terminal:2 LE][1 on | 0 off:2 LE]``."""
-    if terminal not in _OUTPUT_TERMINALS:
+    if terminal not in output_terminals:
         raise ValueError(f"output terminal {terminal} out of range")
     value = _OUTPUT_ON if on else _OUTPUT_OFF
     return terminal.to_bytes(2, "little") + value.to_bytes(2, "little")
@@ -384,10 +463,10 @@ def check_command_response(op: int, resp: bytes) -> None:
         )
 
 
-def zone_terminal(zone_id: int) -> tuple[int, int]:
+def zone_terminal(zone_id: int, half_offset: int = SECOND_HALF_ZONE_OFFSET) -> tuple[int, int]:
     """Return ``(terminal, half)`` holding a zone (half 0 = A, 1 = B)."""
-    if zone_id >= SECOND_HALF_ZONE_OFFSET:
-        return zone_id - SECOND_HALF_ZONE_OFFSET, 1
+    if zone_id >= half_offset:
+        return zone_id - half_offset, 1
     return zone_id, 0
 
 
@@ -440,7 +519,9 @@ def decode_configured_partitions(resp: bytes) -> list[int]:
     ]
 
 
-def zone_candidates(terminal_types: dict[int, int]) -> list[int]:
+def zone_candidates(
+    terminal_types: dict[int, int], half_offset: int = SECOND_HALF_ZONE_OFFSET
+) -> list[int]:
     """Return the zone ids the terminal types allow, in the cgi's order.
 
     A single-zone terminal holds zone ``n`` (half A); a double-zone terminal
@@ -448,13 +529,15 @@ def zone_candidates(terminal_types: dict[int, int]) -> list[int]:
     hold no zone. The order (terminal, then half) matches the cgi listing.
     """
     zones: list[int] = []
-    for terminal in sorted(t for t in terminal_types if t < SECOND_HALF_ZONE_OFFSET):
+    for terminal in sorted(t for t in terminal_types if t < half_offset):
         halves = {_TERMINAL_SINGLE: 1, _TERMINAL_DOUBLE: 2}.get(terminal_types[terminal], 0)
-        zones.extend(terminal + half * SECOND_HALF_ZONE_OFFSET for half in range(halves))
+        zones.extend(terminal + half * half_offset for half in range(halves))
     return zones
 
 
-def _half_spans(zone_ids: list[int]) -> list[tuple[int, int]]:
+def _half_spans(
+    zone_ids: list[int], half_offset: int = SECOND_HALF_ZONE_OFFSET
+) -> list[tuple[int, int]]:
     """Cover ``zone_ids`` with one ``[first, last]`` span per zone half.
 
     Labels and settings are indexed by zone id, so two contiguous reads fetch
@@ -462,8 +545,8 @@ def _half_spans(zone_ids: list[int]) -> list[tuple[int, int]]:
     """
     spans: list[tuple[int, int]] = []
     for half in (
-        [z for z in zone_ids if z < SECOND_HALF_ZONE_OFFSET],
-        [z for z in zone_ids if z >= SECOND_HALF_ZONE_OFFSET],
+        [z for z in zone_ids if z < half_offset],
+        [z for z in zone_ids if z >= half_offset],
     ):
         if half:
             spans.append((min(half), max(half)))
@@ -491,7 +574,9 @@ def _decode_zone_half(half: bytes) -> NativeZoneStatus | None:
     )
 
 
-def decode_terminal_statuses(resp: bytes, start: int, end: int) -> dict[int, NativeZoneStatus]:
+def decode_terminal_statuses(
+    resp: bytes, start: int, end: int, half_offset: int = SECOND_HALF_ZONE_OFFSET
+) -> dict[int, NativeZoneStatus]:
     """Decode a terminal-status response for ``[start, end)`` into ``{zone_id: status}``.
 
     Only single- and double-zone terminals yield zones; outputs, disabled and
@@ -508,7 +593,7 @@ def decode_terminal_statuses(resp: bytes, start: int, end: int) -> dict[int, Nat
         for half in range(halves):
             status = _decode_zone_half(rec[2 + half * 4 : 6 + half * 4])
             if status is not None:
-                out[terminal + half * SECOND_HALF_ZONE_OFFSET] = status
+                out[terminal + half * half_offset] = status
     return out
 
 
@@ -813,6 +898,10 @@ class Local6004Client:
         self._port = port
         self._timeout = timeout
         self._key, self._iv = make_key_iv(password)
+        # Memory map for this panel's firmware family. Defaults to 40x so the
+        # live status/command methods work even before a config read; a config
+        # read updates it from the firmware version (see _read_config).
+        self._layout = _LAYOUT_40X
         # Persistent connection for the frequent status command; opened lazily,
         # dropped on any error and re-opened on the next call.
         self._status_conn: tuple[asyncio.StreamReader, asyncio.StreamWriter] | None = None
@@ -844,11 +933,12 @@ class Local6004Client:
                 raise Local6004Error(str(err) or type(err).__name__) from err
 
     async def _get_zone_statuses(self, zone_ids: set[int]) -> dict[int, NativeZoneStatus]:
+        half = self._layout.half_offset
         out: dict[int, NativeZoneStatus] = {}
-        for start, end in terminal_chunks({zone_terminal(z)[0] for z in zone_ids}):
+        for start, end in terminal_chunks({zone_terminal(z, half)[0] for z in zone_ids}):
             data = start.to_bytes(2, "little") + end.to_bytes(2, "little")
             resp = await self._status(_status_cmd(_OP_TERMINAL_STATUS, data))
-            out |= decode_terminal_statuses(resp, start, end)
+            out |= decode_terminal_statuses(resp, start, end, half)
         return {zone_id: status for zone_id, status in out.items() if zone_id in zone_ids}
 
     async def _status(self, body: bytes) -> bytes:
@@ -900,7 +990,9 @@ class Local6004Client:
         timeout: float = COMMAND_TIMEOUT,
     ) -> None:
         """Turn a panel output (terminal 1005..1009) on or off (op 8)."""
-        data = _validated(_OP_SET_OUTPUT, lambda: output_data(terminal, on))
+        data = _validated(
+            _OP_SET_OUTPUT, lambda: output_data(terminal, on, self._layout.output_terminals)
+        )
         await self._command(_OP_SET_OUTPUT, data, pin, timeout)
 
     async def async_reset_areas(
@@ -1032,10 +1124,15 @@ class Local6004Client:
         scenario_labels: dict[int, str] | None = None,
     ) -> list[dict[str, Any]]:
         """Read and decode the panel event log (read-only), time-sorted."""
+        log_addr = self._layout.log_addr
+        if log_addr is None:
+            raise Local6004Error(
+                f"event log offset not mapped for the {self._layout.name} firmware layout"
+            )
         try:
             blob = (
                 await asyncio.wait_for(
-                    self._session(_OPEN_LOG, [(_LOG_ADDR, _LOG_LEN)]), self._timeout
+                    self._session(_OPEN_LOG, [(log_addr, _LOG_LEN)]), self._timeout
                 )
             )[0]
         except (TimeoutError, OSError, ValueError) as err:
@@ -1046,12 +1143,15 @@ class Local6004Client:
         # version first (its own context) -> gate on the 40x layout
         ver_raw = (await self._session(_OPEN_VER, [(_VERSION_ADDR, 16)]))[0]
         firmware = ver_raw.split(b"\x00")[0].decode("latin-1").strip()
-        layout_ok = firmware[:1] == "4"
-        if not layout_ok:
+        layout = _LAYOUTS.get(firmware[:1])
+        if layout is None:
+            # Known-reachable panel, but its config memory map is not mapped:
+            # the caller runs cgi-only (see _async_setup_local).
             return Local6004Config(firmware=firmware, layout_ok=False)
+        self._layout = layout
 
         (modi,) = await self._session(
-            _OPEN_CFG, [(_SCENARIO_MODI_ADDR, _SCENARIO_MODI_REC * _SCENARIO_COUNT)]
+            _OPEN_CFG, [(layout.scenario_modi, _SCENARIO_MODI_REC * _SCENARIO_COUNT)]
         )
         scenes = []
         for sid in range(_SCENARIO_COUNT):
@@ -1069,19 +1169,29 @@ class Local6004Client:
         the labels and zone settings (everything). A failed step only drops
         the kinds that depend on it.
         """
+        layout = self._layout
         area_ids = await self._best_effort(self._scan_partitions())
         terminal_types = await self._best_effort(self._scan_terminals())
-        candidates = zone_candidates(terminal_types) if terminal_types is not None else []
-        spans = _half_spans(candidates)
+        # The zone->area settings offset is only known for some layouts; without
+        # it zones fall back to the cgi (the native zone *status* still works).
+        decode_zones = layout.zone_cfg is not None
+        candidates = (
+            zone_candidates(terminal_types, layout.half_offset)
+            if terminal_types is not None and decode_zones
+            else []
+        )
+        spans = _half_spans(candidates, layout.half_offset)
         reads = [
-            (_AREA_LABELS_ADDR, _LABEL_REC * _PARTITION_COUNT),
-            (_SCENARIO_LABELS_ADDR, _LABEL_REC * _SCENARIO_COUNT),
-            (_OUTPUT_LABELS_ADDR, _LABEL_REC * len(_OUTPUT_TERMINALS)),
+            (layout.area_labels, _LABEL_REC * _PARTITION_COUNT),
+            (layout.scenario_labels, _LABEL_REC * _SCENARIO_COUNT),
+            (layout.output_labels, _LABEL_REC * len(layout.output_terminals)),
         ]
-        for first, last in spans:
-            count = last - first + 1
-            reads.append((_ZONE_LABELS_ADDR + first * _LABEL_REC, count * _LABEL_REC))
-            reads.append((_ZONE_CFG_ADDR + first * _ZONE_CFG_REC, count * _ZONE_CFG_REC))
+        zone_cfg = layout.zone_cfg
+        if zone_cfg is not None:  # equivalently: decode_zones, so spans is non-empty
+            for first, last in spans:
+                count = last - first + 1
+                reads.append((layout.zone_labels + first * _LABEL_REC, count * _LABEL_REC))
+                reads.append((zone_cfg + first * _ZONE_CFG_REC, count * _ZONE_CFG_REC))
         blobs = await self._best_effort(self._session(_OPEN_CFG, reads))
         if blobs is None:
             return Local6004Structure()
@@ -1098,7 +1208,9 @@ class Local6004Client:
                 else [NativeObject(id=a, label=_label_at(area_labels, a)) for a in area_ids]
             ),
             zones=(
-                None if terminal_types is None else _decode_zones(candidates, spans, zone_blobs)
+                _decode_zones(candidates, spans, zone_blobs)
+                if terminal_types is not None and decode_zones
+                else None
             ),
             scenarios=[s for s in scenarios if not is_factory_default_scenario(s.id, s.label)],
             outputs=(
@@ -1106,9 +1218,9 @@ class Local6004Client:
                 if terminal_types is None
                 else [
                     NativeObject(
-                        id=t, label=_label_at(output_labels, t - _OUTPUT_TERMINALS.start)
+                        id=t, label=_label_at(output_labels, t - layout.output_terminals.start)
                     )
-                    for t in _OUTPUT_TERMINALS
+                    for t in layout.output_terminals
                     if terminal_types.get(t) == _TERMINAL_OUTPUT
                 ]
             ),
@@ -1133,9 +1245,10 @@ class Local6004Client:
         Any failed or short chunk fails the whole scan: a partial zone list
         would be worse than falling back to the cgi's.
         """
+        count = self._layout.terminal_count
         chunks = [
-            (start, min(start + _TERMINAL_CHUNK, _TERMINAL_COUNT))
-            for start in range(0, _TERMINAL_COUNT, _TERMINAL_CHUNK)
+            (start, min(start + _TERMINAL_CHUNK, count))
+            for start in range(0, count, _TERMINAL_CHUNK)
         ]
         resps = await self._command_session(
             [
@@ -1212,7 +1325,7 @@ class Local6004Client:
         writer.write(_build_frame(app, self._key, self._iv, first=first))
         await writer.drain()
         header = await reader.readexactly(10)
-        if header[:2] != _PREAMBLE:
+        if header[:2] not in _RESPONSE_PREAMBLES:
             raise ValueError(f"bad preamble {header[:2].hex()} (wrong password?)")
         ln = int.from_bytes(header[6:8], "little")
         ct = await reader.readexactly(ln - 10)
