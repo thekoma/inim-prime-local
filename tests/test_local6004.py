@@ -434,6 +434,58 @@ async def test_async_read_config_wrong_firmware(monkeypatch: pytest.MonkeyPatch)
     assert cfg.scenes == []
 
 
+async def test_async_read_config_accepts_pt_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Firmware 5.x answers with the ``50 54`` preamble: it must be accepted.
+
+    An unmapped major (6.x here) keeps the read to a single minimal session while
+    still proving the preamble is accepted and an unknown layout degrades cleanly.
+    """
+
+    def pt(frame: bytes) -> bytes:
+        return b"\x50\x54" + frame[2:]
+
+    ack = pt(_resp(b"\x00\x00\x00\x00"))
+    _patch_sessions(monkeypatch, [[ack, pt(_version_frame("6.00 PX020"))]])
+    cfg = await m.Local6004Client("host", "pass").async_read_config()
+    assert cfg.firmware == "6.00 PX020"
+    assert not cfg.layout_ok
+    assert cfg.scenes == []
+    assert cfg.structure is None
+
+
+def test_layout_50x_offsets() -> None:
+    """Firmware 5.00 maps to the 50x layout with the +500-shifted offsets."""
+    layout = m._LAYOUTS["5"]
+    assert layout.half_offset == 1505
+    assert layout.output_terminals == range(1505, 1510)
+    assert layout.scenario_modi == 0x14099368
+    assert layout.scenario_labels == 0x14041760
+    assert layout.output_labels == 0x14041D30
+    assert layout.area_labels == m._LAYOUT_40X.area_labels  # unchanged
+    assert layout.zone_labels == m._LAYOUT_40X.zone_labels  # unchanged
+    assert layout.zone_cfg is None and layout.log_addr is None
+
+
+def test_zone_id_math_honors_50x_half_offset() -> None:
+    """Zone id <-> terminal math and status decode use the layout half-offset."""
+    assert m.zone_terminal(1505, 1505) == (0, 1)
+    assert m.zone_terminal(1522, 1505) == (17, 1)
+    assert m.zone_terminal(19, 1505) == (19, 0)
+    assert m.zone_candidates({0: m._TERMINAL_DOUBLE}, 1505) == [0, 1505]
+    # A double terminal 0 yields zone ids 0 (half A) and 1505 (half B) on 5.x.
+    rec = bytes([m._TERMINAL_DOUBLE, 0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00])
+    resp = b"\x00" * m._STATUS_HEADER + rec
+    assert set(m.decode_terminal_statuses(resp, 0, 1, 1505)) == {0, 1505}
+
+
+def test_output_data_honors_layout_output_range() -> None:
+    """On 5.x outputs live at terminals 1505..1509; the 4.x ids are then rejected."""
+    assert m.output_data(1505, True, range(1505, 1510)) == b"\xe1\x05\x01\x00"
+    with pytest.raises(ValueError):
+        m.output_data(1005, True, range(1505, 1510))
+    assert m.output_data(1005, True)  # default range is still the 4.x one
+
+
 async def test_async_read_config_bad_preamble(monkeypatch: pytest.MonkeyPatch) -> None:
     # A frame with the wrong preamble (wrong password) -> Local6004Error.
     bad = b"\xaa\xaa" + _resp(b"\x00")[2:]
@@ -514,6 +566,14 @@ async def test_async_read_event_log(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_session", fake_session)
     events = await client.async_read_event_log({0: "Home"})
     assert events[0]["event"] == "Valid key"
+
+
+async def test_event_log_unavailable_on_50x_layout() -> None:
+    """A layout with no mapped event-log offset (5.x) errors instead of reading garbage."""
+    client = m.Local6004Client("host", "pass")
+    client._layout = m._LAYOUT_50X
+    with pytest.raises(m.Local6004Error, match="event log offset not mapped"):
+        await client.async_read_event_log()
 
 
 async def test_async_read_event_log_error(monkeypatch: pytest.MonkeyPatch) -> None:

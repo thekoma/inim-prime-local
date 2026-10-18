@@ -14,7 +14,7 @@
         },
         "data_description": {
           "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\").",
-          "local_6004_password": "La password LAN/di programmazione della centrale (default 'pass'). Obbligatoria: letta via protocollo locale (TCP 6004) per le scene multi-attive e il modello preciso. Solo firmware PrimeX 4.x."
+          "local_6004_password": "La password LAN/di programmazione della centrale (default 'pass'). Obbligatoria: letta via protocollo locale (TCP 6004) per le scene multi-attive e il modello preciso. Firmware PrimeX/Prime 4.x e 5.00 supportati in modo nativo; altri firmware usano solo la CGI (aree, zone, scenari, uscite e stati)."
         }
       },
       "reauth_confirm": {
@@ -37,7 +37,7 @@
         },
         "data_description": {
           "name": "Nome dell'impianto — usato per il device e i nomi delle entità (es. \"Allarme\").",
-          "local_6004_password": "La password LAN/di programmazione della centrale (default 'pass'). Obbligatoria: letta via protocollo locale (TCP 6004) per le scene multi-attive e il modello preciso. Solo firmware PrimeX 4.x."
+          "local_6004_password": "La password LAN/di programmazione della centrale (default 'pass'). Obbligatoria: letta via protocollo locale (TCP 6004) per le scene multi-attive e il modello preciso. Firmware PrimeX/Prime 4.x e 5.00 supportati in modo nativo; altri firmware usano solo la CGI (aree, zone, scenari, uscite e stati)."
         }
       }
     },
@@ -45,7 +45,6 @@
       "invalid_auth": "Chiave API non valida.",
       "cannot_connect": "Impossibile connettersi alla centrale.",
       "local_cannot_connect": "Impossibile raggiungere il protocollo locale della centrale (TCP 6004). Verifica la password LAN e che la centrale sia raggiungibile.",
-      "local_unsupported_firmware": "Il firmware di questa centrale non è un layout PrimeX 4.x supportato.",
       "unknown": "Errore imprevisto."
     },
     "abort": {

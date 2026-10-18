@@ -26,6 +26,8 @@ from custom_components.inim_prime.client import (
 )
 from custom_components.inim_prime.const import (
     CONF_LOCAL_PASSWORD,
+    CONF_NATIVE_AREA_POLL,
+    CONF_NATIVE_COMMANDS,
     DOMAIN,
 )
 from custom_components.inim_prime.coordinator import InimData, InimDataUpdateCoordinator
@@ -167,14 +169,28 @@ async def test_setup_local_read_error_not_ready(
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
 
 
-async def test_setup_wrong_firmware_errors(
+async def test_setup_unknown_layout_runs_cgi_only(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, patch_client: AsyncMock
 ) -> None:
-    """Unsupported (non-4.x) firmware aborts setup (ConfigEntryError)."""
-    cfg = Local6004Config(firmware="3.10 PRIME", layout_ok=False)
+    """A firmware whose native layout is not mapped (e.g. a future 6.x) sets up cgi-only.
+
+    Even with the native poll and native commands enabled, no native client is
+    attached: states and commands go over the cgi. (4.x and 5.00 are mapped and
+    run natively; this covers the fallback for a major we have not mapped.)
+    """
+    cfg = Local6004Config(firmware="6.00 PX020", layout_ok=False)
     mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry, options={CONF_NATIVE_AREA_POLL: True, CONF_NATIVE_COMMANDS: True}
+    )
     with patch("custom_components.inim_prime.Local6004Client") as cls:
         cls.return_value.async_read_config = AsyncMock(return_value=cfg)
-        assert not await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
         await hass.async_block_till_done()
-    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    runtime = mock_config_entry.runtime_data
+    assert runtime.local_client is None
+    assert runtime.coordinator.local_config is None
+    assert runtime.coordinator.native_client is None
+    assert runtime.coordinator.command_client is None
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
