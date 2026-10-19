@@ -15,10 +15,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.inim_prime import commands
 from custom_components.inim_prime.client import (
     SCENE_DECODED_PARTITIONS,
-    ApiStatus,
     AreaMode,
     ArmMode,
-    InimApiError,
     InimConnectionError,
     Local6004Config,
     NativeCommandInvalid,
@@ -188,27 +186,22 @@ async def test_arm_checks_the_target_zones_live(
         mock_client.arm_area.assert_not_awaited()
 
 
-async def test_zones_not_ready_live_goes_to_the_cgi(
+async def test_zones_not_ready_live_raises_without_the_cgi(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_client: AsyncMock,
     mock_local_config: Local6004Config,
 ) -> None:
-    """The panel's own check (ZONES_NOT_READY) then decides, as with the option off."""
+    """A live not-ready zone is reported directly; arming never touches the cgi."""
     coordinator, native = await _coordinator(
         hass, mock_config_entry, mock_client, mock_local_config
     )
     native.async_set_area_modes.side_effect = NativeZonesNotReady(3, "zones not ready: [1]")
-    mock_client.arm_area.side_effect = InimApiError(ApiStatus.ZONES_NOT_READY)
 
-    with pytest.raises(InimApiError):
+    with pytest.raises(HomeAssistantError):
         await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
     native.async_set_area_modes.assert_awaited_once()
-    mock_client.arm_area.assert_awaited_once_with(1, ArmMode.TOTAL)
-
-    mock_client.arm_area.side_effect = None  # zones closed meanwhile: the cgi arms
-    await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
-    assert mock_client.arm_area.await_count == 2
+    mock_client.arm_area.assert_not_awaited()
 
 
 async def test_arm_works_without_the_native_poll(
