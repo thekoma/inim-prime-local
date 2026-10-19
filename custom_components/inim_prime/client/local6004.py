@@ -242,7 +242,9 @@ class _Layout:
     output-terminal range differ. ``zone_cfg`` / ``log_addr`` are ``None`` when
     that table's offset is not mapped for the family yet: the zone->area map and
     the event log are then unavailable, while the rest of the native channel
-    (live area/zone status, scenes, labels, write commands) still works.
+    (live area/zone status, scenes, labels) still works. ``native_writes_ok`` is
+    False for a family whose write-command responses have not been verified on a
+    live panel; the integration then keeps commands on the cgi for that family.
     """
 
     name: str
@@ -255,6 +257,7 @@ class _Layout:
     terminal_count: int
     zone_cfg: int | None
     log_addr: int | None
+    native_writes_ok: bool
 
     @property
     def output_terminals(self) -> range:
@@ -272,6 +275,7 @@ _LAYOUT_40X = _Layout(
     terminal_count=1010,
     zone_cfg=_ZONE_CFG_ADDR,
     log_addr=_LOG_ADDR,
+    native_writes_ok=True,
 )
 # 50x (PrimeX/Prime firmware 5.00): verified read-only on a live panel in Oct
 # 2026. Area and zone label tables are unchanged; the scenario-mode,
@@ -289,6 +293,9 @@ _LAYOUT_50X = _Layout(
     terminal_count=1510,
     zone_cfg=None,
     log_addr=None,
+    # Native writes verified live on 5.00 (2026-10-19): single arm/disarm ops
+    # answer in ~0.03 s with the same echo as 4.07 and do not lock the panel.
+    native_writes_ok=True,
 )
 # Panel firmware major digit -> memory map. A firmware not listed is read for its
 # version only (layout_ok False) and the integration then runs cgi-only.
@@ -906,6 +913,15 @@ class Local6004Client:
         # dropped on any error and re-opened on the next call.
         self._status_conn: tuple[asyncio.StreamReader, asyncio.StreamWriter] | None = None
         self._status_lock = asyncio.Lock()
+
+    @property
+    def supports_native_writes(self) -> bool:
+        """Whether native write commands are verified for this panel's firmware.
+
+        False on a family whose write-command response is not yet verified on a
+        live panel (e.g. 5.00): the caller keeps commands on the cgi.
+        """
+        return self._layout.native_writes_ok
 
     async def async_get_area_statuses(
         self, timeout: float = STATUS_TIMEOUT

@@ -195,6 +195,7 @@ def mock_local_client(mock_local_config: Local6004Config) -> AsyncMock:
     local.async_read_config.return_value = mock_local_config
     local.async_get_area_statuses.return_value = {}
     local.async_get_zone_statuses.return_value = {}
+    local.supports_native_writes = True
     return local
 
 

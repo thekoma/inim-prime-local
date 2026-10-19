@@ -54,6 +54,36 @@ def _client(session, **kw):
     return InimPrimeClient("1.2.3.4", 8080, "KEY", session, **kw)
 
 
+class _RaisingSession:
+    """Session whose request raises a transport error carrying the API key."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def get(self, url, params=None, timeout=None):  # noqa: ANN001, ANN201
+        exc = self._exc
+
+        class _CM:
+            async def __aenter__(self_inner):  # noqa: ANN001
+                raise exc
+
+            async def __aexit__(self_inner, *a):  # noqa: ANN001
+                return False
+
+        return _CM()
+
+
+async def test_connection_error_redacts_apikey() -> None:
+    """The API key must never appear in a surfaced connection error (it leaks via the URL)."""
+    import aiohttp
+
+    sess = _RaisingSession(aiohttp.ClientError("timeout to ...?apikey=KEY&cmd=ping"))
+    with pytest.raises(InimConnectionError) as exc:
+        await _client(sess).ping()
+    assert "KEY" not in str(exc.value)
+    assert "***" in str(exc.value)
+
+
 # ---------------------------------------------------------------------------
 # _request transport / status error branches
 # ---------------------------------------------------------------------------

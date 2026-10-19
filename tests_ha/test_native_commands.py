@@ -456,16 +456,40 @@ async def test_setup_option_attaches_the_command_client(
     mock_local_client.async_close.assert_awaited_once()
 
 
-async def test_setup_default_keeps_commands_on_the_cgi(
+async def test_native_commands_unverified_firmware_uses_cgi(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    mock_config_entry: MockConfigEntry,
+    patch_client: AsyncMock,
+    mock_local_client: AsyncMock,
+) -> None:
+    """On a firmware whose native writes are not verified (e.g. 5.00), commands use the cgi."""
+    caplog.set_level(logging.WARNING)
+    mock_local_client.supports_native_writes = False
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry,
+        options={CONF_NATIVE_AREA_POLL: False, CONF_NATIVE_COMMANDS: True},
+    )
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = mock_config_entry.runtime_data.coordinator
+    assert coordinator.command_client is None
+    assert "not verified for this panel's firmware" in caplog.text
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+
+
+async def test_setup_default_uses_native_commands(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     patch_client: AsyncMock,
     mock_local_client: AsyncMock,
 ) -> None:
+    """Native is the default command path: arming goes over the native channel."""
     mock_config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
-    assert mock_config_entry.runtime_data.coordinator.command_client is None
+    assert mock_config_entry.runtime_data.coordinator.command_client is mock_local_client
 
     await hass.services.async_call(
         "alarm_control_panel",
@@ -473,8 +497,8 @@ async def test_setup_default_keeps_commands_on_the_cgi(
         {"entity_id": "alarm_control_panel.inim_prime_home"},
         blocking=True,
     )
-    patch_client.arm_area.assert_awaited_once_with(1, ArmMode.TOTAL)
-    mock_local_client.async_set_area_modes.assert_not_awaited()
+    mock_local_client.async_set_area_modes.assert_awaited()
+    patch_client.arm_area.assert_not_awaited()
 
 
 async def test_entities_route_natively_with_the_option_on(
