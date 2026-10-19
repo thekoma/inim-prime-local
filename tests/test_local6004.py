@@ -463,7 +463,8 @@ def test_layout_50x_offsets() -> None:
     assert layout.output_labels == 0x14041D30
     assert layout.area_labels == m._LAYOUT_40X.area_labels  # unchanged
     assert layout.zone_labels == m._LAYOUT_40X.zone_labels  # unchanged
-    assert layout.zone_cfg is None and layout.log_addr is None
+    assert layout.zone_cfg == 0x1408B920  # recovered from Centrale5.dll, verified live
+    assert layout.log_addr is None  # event-log 5.x offset still unmapped
     assert layout.native_writes_ok is True  # 5.00 native writes verified live
 
 

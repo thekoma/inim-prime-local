@@ -279,9 +279,15 @@ _LAYOUT_40X = _Layout(
 )
 # 50x (PrimeX/Prime firmware 5.00): verified read-only on a live panel in Oct
 # 2026. Area and zone label tables are unchanged; the scenario-mode,
-# scenario-label and output-label tables moved, and the half-B zone id and the
-# output terminals shifted by +500. The zone-settings (zone->area) and event-log
-# 5.x offsets are not mapped yet, so both are None and degrade on their own.
+# scenario-label, output-label and zone-settings (zone->area) tables moved, and
+# the half-B zone id and the output terminals shifted by +500. The zone-settings
+# base was recovered from the Prime/STUDIO Centrale5.dll: each address in the
+# DLL's field table is wrapped by an ``04 .. .. 00 10 04`` marker, and 0x1408B920
+# is the only candidate near scenario_modi carrying it; it also checks out
+# arithmetically, since 0x1408B920 + (2*1505)*11 lands two bytes before the next
+# field, exactly as the 4.x table does (0x14073414 + (2*1005)*11). The record is
+# still 11 bytes; only the zone count grew with the terminal count. The event-log
+# 5.x offset is still unmapped, so log_addr stays None and degrades on its own.
 _LAYOUT_50X = _Layout(
     name="50x",
     scenario_modi=0x14099368,
@@ -291,7 +297,7 @@ _LAYOUT_50X = _Layout(
     output_labels=0x14041D30,
     half_offset=1505,
     terminal_count=1510,
-    zone_cfg=None,
+    zone_cfg=0x1408B920,
     log_addr=None,
     # Native writes verified live on 5.00 (2026-10-19): single arm/disarm ops
     # answer in ~0.03 s with the same echo as 4.07 and do not lock the panel.
