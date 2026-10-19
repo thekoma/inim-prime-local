@@ -280,14 +280,16 @@ _LAYOUT_40X = _Layout(
 # 50x (PrimeX/Prime firmware 5.00): verified read-only on a live panel in Oct
 # 2026. Area and zone label tables are unchanged; the scenario-mode,
 # scenario-label, output-label and zone-settings (zone->area) tables moved, and
-# the half-B zone id and the output terminals shifted by +500. The zone-settings
-# base was recovered from the Prime/STUDIO Centrale5.dll: each address in the
-# DLL's field table is wrapped by an ``04 .. .. 00 10 04`` marker, and 0x1408B920
-# is the only candidate near scenario_modi carrying it; it also checks out
-# arithmetically, since 0x1408B920 + (2*1505)*11 lands two bytes before the next
-# field, exactly as the 4.x table does (0x14073414 + (2*1005)*11). The record is
-# still 11 bytes; only the zone count grew with the terminal count. The event-log
-# 5.x offset is still unmapped, so log_addr stays None and degrades on its own.
+# the half-B zone id and the output terminals shifted by +500. The offsets are
+# recovered by symbol name from the Prime/STUDIO Centrale5.dll's own field table
+# (class maps_500::getValue): zone_cfg = getValue["spring_exf_prg_zones"] =
+# 0x1408B920, scenario_modi = getValue["spring_exf_prg_scenari"] = 0x14099368.
+# See tools/offsets/ (the extractor and its committed output) and
+# tests/test_offset_provenance.py, which pins each offset to that DLL-attested
+# value. The zone_cfg record is still 11 bytes; only the zone count grew with the
+# terminal count (0x1408B920 live-verified on 5.00: 20/20 zones, correct area
+# membership). The 5.x event-log offset is known (spring_eep_logger_ev = 0x104A8)
+# but log_addr stays None until the 5.x log decode is verified live.
 _LAYOUT_50X = _Layout(
     name="50x",
     scenario_modi=0x14099368,
