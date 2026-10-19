@@ -76,7 +76,9 @@ NATIVE_AREA_BACKOFF_TICKS: Final = 15
 # layouts come from Pitscheider's library and have not been live-verified by
 # this project, so the owner opts in after testing (docs/native-commands.md).
 CONF_NATIVE_COMMANDS: Final = "native_commands"
-DEFAULT_NATIVE_COMMANDS: Final = False
+# Default: native write commands over TCP 6004 (verified live on PrimeX 4.07 and
+# 5.00). The owner wants native as the default path; the cgi stays the fallback.
+DEFAULT_NATIVE_COMMANDS: Final = True
 
 # Read-only local protocol (TCP 6004) — MANDATORY. Reads the static scenario
 # definitions (for accurate multi-active scene sensors the cgi cannot express),

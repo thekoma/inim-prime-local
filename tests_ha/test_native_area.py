@@ -22,6 +22,7 @@ from custom_components.inim_prime.client import (
 )
 from custom_components.inim_prime.const import (
     CONF_NATIVE_AREA_POLL,
+    CONF_NATIVE_COMMANDS,
     NATIVE_AREA_BACKOFF_TICKS,
     NATIVE_AREA_FAILURES_BEFORE_BACKOFF,
     NATIVE_AREA_POLL_INTERVAL,
@@ -188,10 +189,11 @@ async def test_setup_native_poll_disabled(
     patch_client: AsyncMock,
     mock_local_client: AsyncMock,
 ) -> None:
-    """With the option off no native client is attached."""
+    """With both native options off, no native client is attached or closed."""
     mock_config_entry.add_to_hass(hass)
     hass.config_entries.async_update_entry(
-        mock_config_entry, options={CONF_NATIVE_AREA_POLL: False}
+        mock_config_entry,
+        options={CONF_NATIVE_AREA_POLL: False, CONF_NATIVE_COMMANDS: False},
     )
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()

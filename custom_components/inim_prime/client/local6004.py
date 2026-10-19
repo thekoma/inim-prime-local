@@ -293,9 +293,9 @@ _LAYOUT_50X = _Layout(
     terminal_count=1510,
     zone_cfg=None,
     log_addr=None,
-    # Native write commands are not verified on 5.00 yet (a write there is the
-    # suspected cause of a panel lock-up on 2026-10-19), so commands use the cgi.
-    native_writes_ok=False,
+    # Native writes verified live on 5.00 (2026-10-19): single arm/disarm ops
+    # answer in ~0.03 s with the same echo as 4.07 and do not lock the panel.
+    native_writes_ok=True,
 )
 # Panel firmware major digit -> memory map. A firmware not listed is read for its
 # version only (layout_ok False) and the integration then runs cgi-only.

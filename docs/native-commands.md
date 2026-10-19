@@ -1,8 +1,8 @@
-# Native commands (experimental)
+# Native commands
 
-By default every write (arm/disarm, scenarios, zone bypass, outputs, alarm-memory reset) goes through the panel's cgi, as it always has. The option **Native commands (arm/disarm, bypass, outputs) — experimental** sends them over the panel's native TCP 6004 protocol instead, the same channel the fast area and zone polling already uses.
+By default every write (arm/disarm, scenarios, zone bypass, outputs, alarm-memory reset) goes over the panel's native TCP 6004 protocol, the same channel the fast area and zone polling uses. The option **Native commands (arm/disarm, bypass, outputs)** can be turned off to route them through the panel's cgi instead.
 
-> **Off by default, not yet live-verified.** The command layouts follow [Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native) (GPL-3.0), but this project has not yet run them against a live panel. Turn the option on only to test it as described below, while you are at home.
+> **On by default, verified live on PrimeX 4.07 and 5.00.** The command layouts follow [Pitscheider/inim-prime-native](https://github.com/Pitscheider/inim-prime-native) (GPL-3.0) and have been run against a live panel. Turn the option off to route commands through the cgi. The night/instant mode mapping is still worth checking on your keypad (see below).
 
 ## What goes native
 
