@@ -16,9 +16,9 @@ running a command twice:
 
 Arming (any target mode other than disarmed) reads the zones of the target
 areas natively, under the same lock and right before sending, and sends only
-if every one is ready or bypassed. Otherwise nothing is sent and the cgi is
-used, so the panel's own readiness check (and its ZONES_NOT_READY answer)
-applies: how the native command treats open zones is not known. Tamper,
+if every one is ready or bypassed. Otherwise nothing is sent and the caller
+gets a zones-not-ready error: the native readiness read is authoritative, so
+arming never falls back to the cgi just because a zone is open. Tamper,
 faults and alarm memory are not checked on the native path. Scenarios go
 native only when every target maps to one mode and the panel has no
 partition beyond the decoded scene range (0-11).
@@ -70,11 +70,13 @@ async def _async_run(
     try:
         await native(client)
     except NativeZonesNotReady as err:
-        # The cgi then applies the panel's own readiness check (and answers
-        # ZONES_NOT_READY), exactly as with the option off.
-        LOGGER.debug("Native %s not sent (%s); using the cgi", what, err)
-        await cgi()
-        return
+        # The native pre-send check read the target zones live and found one
+        # open. Report it directly instead of re-asking the cgi, so arming never
+        # falls back to the (fragile) cgi channel just because a zone is open.
+        LOGGER.debug("Native %s not sent (%s); zones not ready", what, err)
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="zones_not_ready"
+        ) from err
     except NativeCommandNotSent as err:
         LOGGER.warning("Native %s was not sent (%s); sending it over the cgi", what, err)
         await cgi()
