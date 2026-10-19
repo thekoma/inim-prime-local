@@ -93,7 +93,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
                 " commands go over the cgi"
             )
     else:
-        if native_commands:
+        if native_commands and not local_client.supports_native_writes:
+            # The panel firmware's native write responses are not verified yet
+            # (e.g. 5.00): keep commands on the cgi rather than risk the panel.
+            LOGGER.warning(
+                "Native commands are on but not verified for this panel's firmware;"
+                " arming, bypass, outputs and reset go over the cgi"
+            )
+        elif native_commands:
             # Opt-in native write commands (cgi fallback only when never sent).
             coordinator.command_client = local_client
             if not native_poll:

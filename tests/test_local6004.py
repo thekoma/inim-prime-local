@@ -464,6 +464,17 @@ def test_layout_50x_offsets() -> None:
     assert layout.area_labels == m._LAYOUT_40X.area_labels  # unchanged
     assert layout.zone_labels == m._LAYOUT_40X.zone_labels  # unchanged
     assert layout.zone_cfg is None and layout.log_addr is None
+    assert layout.native_writes_ok is False  # 5.00 writes not verified yet
+
+
+def test_supports_native_writes_per_layout() -> None:
+    """Native writes are verified on 4.x but not on 5.00; the client reflects it."""
+    assert m._LAYOUT_40X.native_writes_ok is True
+    assert m._LAYOUT_50X.native_writes_ok is False
+    client = m.Local6004Client("host", "pass")  # defaults to the 40x layout
+    assert client.supports_native_writes is True
+    client._layout = m._LAYOUT_50X
+    assert client.supports_native_writes is False
 
 
 def test_zone_id_math_honors_50x_half_offset() -> None:

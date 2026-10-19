@@ -42,6 +42,11 @@ class InimConnectionError(InimError):
     """Transport/connection failure."""
 
 
+def _redact(text: str, secret: str) -> str:
+    """Hide the API key if it leaked into an error string (e.g. the request URL)."""
+    return text.replace(secret, "***") if secret else text
+
+
 class InimPrimeClient:
     def __init__(self, host: str, port: int, apikey: str,
                  session: aiohttp.ClientSession,
@@ -68,7 +73,7 @@ class InimPrimeClient:
                     raise InimConnectionError(f"HTTP {resp.status}")
                 body = await resp.text()
         except (TimeoutError, aiohttp.ClientError) as err:
-            raise InimConnectionError(str(err)) from err
+            raise InimConnectionError(_redact(str(err), self._apikey)) from err
         envelope = json.loads(body)
         status = envelope.get("status")
         if status != ApiStatus.SUCCESS:
