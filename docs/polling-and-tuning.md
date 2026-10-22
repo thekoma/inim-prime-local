@@ -10,9 +10,18 @@ One cycle sends four read-only status commands, one after the other, over a sing
 | Partition status (op 6) | every area's arming mode, alarm and sabotage state, alarm memory |
 | Terminal status (op 7), zone terminals | every zone's state (ready, open, tamper, short), bypass, alarm memory |
 | Terminal status (op 7), output terminals | every output's on/off state |
-| System status (op 0x0D) | the panel faults (mains, battery, phone line, GSM, sirens, wireless…), tampers, the service jumper and the supply voltage |
+| System status (op 0x0D) | the panel faults (mains, battery, phone line, GSM, sirens, wireless…), the tampers and which device reports them, the service jumper, an open programming session, VoLTE, and the supply and battery voltages |
 
 Measured on a PrimeX 4.07, each command answers in about **10 ms** (a first read on a connection that sat idle was measured at up to ~4 s, hence the 5 s ceiling below). Zones are read only for the terminals that host a configured zone, in requests of up to 20 terminals. A change on the panel therefore shows up in Home Assistant within about 2 s, without any push setup.
+
+Two slower-changing readings ride on the same cycle, less often:
+
+| Command | Every | Gives |
+|---|---|---|
+| Power values (op 0x31) | 1 minute | the battery temperature and internal resistance |
+| GSM status (op 0x5E) | 5 minutes | the LTE communicator's signal level (0–100), networks (2G/3G/4G), operator code (MCC+MNC) and faults. The panel asks the modem for these, hence the longer interval |
+
+The GSM reply also carries the SIM and modem identifiers (IMSI, ICCID, IMEI): the integration decodes only the status bytes and the operator code, and never keeps, logs or shows the identifiers. A panel without a GSM module gets no GSM sensor. If either reading fails, the last one is kept and the cycle goes on: they are not needed for the alarm itself.
 
 The panel accepts several concurrent 6004 clients, so Prime/STUDIO can still connect while Home Assistant is running.
 

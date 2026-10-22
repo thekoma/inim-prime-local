@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Protocol
@@ -12,18 +13,26 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client import (
+    GSM_NO_MODULE,
+    GSM_NOT_INITIALISED,
+    GSM_OK,
     Area,
     AreaMode,
     AreaState,
     Fault,
+    Gsm,
     Local6004Client,
     Local6004Config,
     Local6004Error,
     Local6004Structure,
     NativeAreaStatus,
+    NativeGsmStatus,
+    NativePowerValues,
     NativeSystemStatus,
     NativeZoneStatus,
     Output,
+    PanelStatus,
+    Power,
     Scenario,
     Version,
     Zone,
@@ -44,9 +53,11 @@ from .const import (
     EV_ZONE_OPEN,
     FAILURES_BEFORE_BACKOFF,
     FAILURES_BEFORE_UNAVAILABLE,
+    GSM_POLL_INTERVAL,
     LOGGER,
     NATIVE_BACKOFF_INTERVAL,
     NATIVE_POLL_INTERVAL,
+    SLOW_POLL_INTERVAL,
 )
 
 
@@ -60,6 +71,10 @@ class InimData:
     scenarios: list[Scenario]
     outputs: list[Output]
     fault: Fault
+    power: Power
+    panel: PanelStatus
+    # None when the panel has no GSM module, or its status was never read.
+    gsm: Gsm | None = None
 
 
 class _HasId(Protocol):
@@ -84,7 +99,10 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
     the native structure read once at setup (``local_config``). Every cycle then
     reads the live state with a handful of read-only status commands (~10 ms
     each): the partitions, the zone terminals, the output terminals and the
-    system status (faults, tampers, supply voltage).
+    system status (faults, tampers, voltages). The power values (battery
+    temperature and internal resistance) change slowly and are read once every
+    ``SLOW_POLL_INTERVAL`` seconds, and the LTE communicator status once every
+    ``GSM_POLL_INTERVAL`` seconds, within a cycle.
     """
 
     config_entry: InimConfigEntry
@@ -114,6 +132,11 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         # FAILURES_BEFORE_BACKOFF so a panel that stopped answering is not
         # hammered.
         self._consecutive_failures = 0
+        # The slow-changing values: the last readings, and when each was last
+        # read (monotonic seconds, by kind).
+        self._power_values: NativePowerValues | None = None
+        self._gsm_status: NativeGsmStatus | None = None
+        self._slow_read_at: dict[str, float] = {}
         super().__init__(
             hass,
             LOGGER,
@@ -153,7 +176,33 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         zones = await self.client.async_get_zone_statuses(zone_ids) if zone_ids else {}
         outputs = await self.client.async_get_output_states(output_ids) if output_ids else {}
         system = await self.client.async_get_system_status()
+        await self._read_slow(time.monotonic())
         return self._build(areas, zones, outputs, system)
+
+    async def _read_slow(self, now: float) -> None:
+        """Read the slow-changing values when due; a failure keeps the last reading.
+
+        They are not needed for the alarm itself, so a panel that does not
+        answer them (e.g. another firmware) never fails the cycle.
+        """
+        if self._due("power", SLOW_POLL_INTERVAL, now):
+            try:
+                self._power_values = await self.client.async_get_power_values()
+            except Local6004Error as err:
+                LOGGER.debug("Could not read the panel power values: %s", err)
+        if self._due("gsm", GSM_POLL_INTERVAL, now):
+            try:
+                self._gsm_status = await self.client.async_get_gsm_status()
+            except Local6004Error as err:
+                LOGGER.debug("Could not read the panel GSM status: %s", err)
+
+    def _due(self, kind: str, interval: int, now: float) -> bool:
+        """Return True (and note the read) when ``kind`` is due for a read."""
+        last = self._slow_read_at.get(kind)
+        if last is not None and now - last < interval:
+            return False
+        self._slow_read_at[kind] = now
+        return True
 
     def _build(
         self,
@@ -230,8 +279,15 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             has_faults=system.has_faults,
             flags=dict(system.faults),
             raw=system.raw.hex(),
+            tamper_sources=dict(system.tamper_sources),
         )
-        version = Version(raw=self.local_config.firmware, service=system.service)
+        version = Version(raw=self.local_config.firmware)
+        power_values = self._power_values
+        power = Power(
+            battery_voltage=system.battery_voltage,
+            battery_temperature=power_values.battery_temperature if power_values else None,
+            battery_resistance=power_values.battery_resistance if power_values else None,
+        )
         return InimData(
             version=version,
             areas=areas,
@@ -239,6 +295,26 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             scenarios=scenarios,
             outputs=outputs,
             fault=fault,
+            power=power,
+            panel=PanelStatus(service=system.service, programming=system.programming),
+            gsm=self._gsm(system.volte),
+        )
+
+    def _gsm(self, volte: bool) -> Gsm | None:
+        """Build the GSM model from the last reading; None without a module."""
+        status = self._gsm_status
+        if status is None or status.result == GSM_NO_MODULE:
+            return None
+        state = {GSM_OK: "ok", GSM_NOT_INITIALISED: "not_initialised"}.get(
+            status.result, "error"
+        )
+        return Gsm(
+            state=state,
+            signal=status.signal if state == "ok" else None,
+            networks=status.networks,
+            operator_code=status.operator_code,
+            volte=volte,
+            faults=dict(status.faults),
         )
 
     def _handle_failure(self, message: str, err: Exception) -> InimData:

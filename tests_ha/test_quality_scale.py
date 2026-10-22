@@ -53,10 +53,23 @@ def test_strings_en_identical() -> None:
 
 
 # Expected translated entity keys per platform/domain.
-_EXPECTED_SENSOR_KEYS = {"supply_voltage", "open_zone_count"}
+_EXPECTED_SENSOR_KEYS = {
+    "supply_voltage",
+    "open_zone_count",
+    "battery_voltage",
+    "battery_temperature",
+    "battery_resistance",
+    "gsm_signal",
+}
 # "shutter": a roller-shutter zone keeps its label as name, but takes the
 # shutter icons through this translation key (no shutter binary-sensor class).
-_EXPECTED_BINARY_SENSOR_KEYS = {"system_fault", "shutter", *FAULT_FLAG_KEYS}
+_EXPECTED_BINARY_SENSOR_KEYS = {
+    "system_fault",
+    "shutter",
+    "service_mode",
+    "programming_mode",
+    *FAULT_FLAG_KEYS,
+}
 _EXPECTED_EXCEPTION_KEYS = {
     "bypass_not_applied",
     "zones_not_ready",

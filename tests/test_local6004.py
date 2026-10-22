@@ -906,7 +906,9 @@ def _system_resp(data: bytes, supply: int = 243, battery: int = 134) -> bytes:
 
 def test_system_status_cmd_bytes() -> None:
     assert m._status_cmd(0x0D) == b"\x0d\x00\x00\x00\x00"
-    assert m._STATUS_OPS == frozenset({6, 7, 0x0D})
+    assert m._status_cmd(0x31) == b"\x31\x00\x00\x00\x00"
+    assert m._status_cmd(0x5E) == b"\x5e\x00\x00\x00" + bytes(32)
+    assert m._STATUS_OPS == frozenset({6, 7, 0x0D, 0x31, 0x5E})
 
 
 def test_decode_system_status_no_faults() -> None:
@@ -928,11 +930,46 @@ def test_decode_system_status_each_fault_bit(key: str) -> None:
     assert list(status.faults) == list(m.FAULT_FLAG_KEYS)
 
 
-@pytest.mark.parametrize("pos", m._SYSTEM_TAMPER_BITS)
-def test_decode_system_status_device_tamper_raises_tamper(pos: tuple[int, int]) -> None:
-    status = m.decode_system_status(_system_resp(_system_data(t=pos)))
+@pytest.mark.parametrize("source", list(m._SYSTEM_TAMPER_BITS))
+def test_decode_system_status_device_tamper_raises_tamper(source: str) -> None:
+    status = m.decode_system_status(_system_resp(_system_data(t=m._SYSTEM_TAMPER_BITS[source])))
     assert {k for k, v in status.faults.items() if v} == {"tamper"}
     assert status.has_faults
+    assert {k for k, v in status.tamper_sources.items() if v} == {source}
+
+
+def test_decode_system_status_volte() -> None:
+    data = bytearray(54)
+    assert not m.decode_system_status(_system_resp(bytes(data))).volte
+    data[13] = 0x01
+    assert m.decode_system_status(_system_resp(bytes(data))).volte
+
+
+def test_decode_system_status_no_tamper_source() -> None:
+    status = m.decode_system_status(_system_resp(bytes(54)))
+    assert status.tamper_sources == dict.fromkeys(m._SYSTEM_TAMPER_BITS, False)
+
+
+def _power_resp(temperature: int = 27, resistance: int = 115) -> bytes:
+    data = bytearray(48)
+    data[6:8] = temperature.to_bytes(2, "little")
+    data[8:10] = resistance.to_bytes(2, "little")
+    return (~0x31 & 0xFFFFFFFF).to_bytes(4, "little") + bytes(data)
+
+
+def test_decode_power_values() -> None:
+    values = m.decode_power_values(_power_resp())
+    assert values == m.NativePowerValues(battery_temperature=27, battery_resistance=115)
+
+
+def test_decode_power_values_not_reported() -> None:
+    values = m.decode_power_values(_power_resp(0xFFFF, 0xFFFF))
+    assert values == m.NativePowerValues(battery_temperature=None, battery_resistance=None)
+
+
+def test_decode_power_values_short_raises() -> None:
+    with pytest.raises(ValueError, match="short power-values"):
+        m.decode_power_values(_power_resp()[:20])
 
 
 def test_decode_system_status_unmapped_fault_bit_and_flags() -> None:
@@ -967,6 +1004,75 @@ async def test_system_status_short_response_closes(monkeypatch: pytest.MonkeyPat
     with pytest.raises(m.Local6004Error, match="short"):
         await client.async_get_system_status()
     assert client._status_conn is None
+
+
+async def test_power_values_over_the_persistent_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairs = _patch_sessions(monkeypatch, [[_resp(_power_resp(26, 120))]])
+    client = m.Local6004Client("host", "pass")
+    values = await client.async_get_power_values()
+    assert values == m.NativePowerValues(battery_temperature=26, battery_resistance=120)
+    assert _decrypt(pairs[0][1].sent[0]) == b"\x31\x00\x00\x00\x00"
+
+
+# A made-up identifier pattern: the decode must never carry any of it.
+_FAKE_ID = b"9876543210123456789"
+
+
+def _gsm_resp(
+    result: int = 0, faults: int = 0, networks: int = 0x0E, signal: int = 67, operator: bytes = b"00101"
+) -> bytes:
+    data = bytearray(698)
+    data[0:4] = bytes([result, faults, networks, signal])
+    data[34 : 34 + 15] = _FAKE_ID[:15]  # IMSI
+    data[54 : 54 + 19] = _FAKE_ID  # ICCID
+    data[78 : 78 + len(operator)] = operator
+    data[98:] = (b"Manufacturer: X\r\nIMEI: " + _FAKE_ID[:15]).ljust(600, b"\0")
+    return (~0x5E & 0xFFFFFFFF).to_bytes(4, "little") + bytes(data)
+
+
+def test_decode_gsm_status() -> None:
+    status = m.decode_gsm_status(_gsm_resp())
+    assert status == m.NativeGsmStatus(
+        result=m.GSM_OK,
+        faults=dict.fromkeys(m._GSM_FAULT_BITS, False),
+        networks=("2G", "3G", "4G"),
+        signal=67,
+        operator_code="00101",
+    )
+
+
+def test_decode_gsm_status_never_carries_identifiers() -> None:
+    status = m.decode_gsm_status(_gsm_resp())
+    assert _FAKE_ID[:6].decode() not in repr(status)
+
+
+@pytest.mark.parametrize(("bit", "name"), list(enumerate(m._GSM_FAULT_BITS)))
+def test_decode_gsm_status_fault_bits(bit: int, name: str) -> None:
+    status = m.decode_gsm_status(_gsm_resp(faults=1 << bit, networks=0x08))
+    assert {k for k, v in status.faults.items() if v} == {name}
+    assert status.networks == ("4G",)
+
+
+@pytest.mark.parametrize("operator", [b"", b"--", b"1234", b"2220x"])
+def test_decode_gsm_status_operator_code_only_when_valid(operator: bytes) -> None:
+    assert m.decode_gsm_status(_gsm_resp(operator=operator)).operator_code == ""
+
+
+def test_decode_gsm_status_short_raises() -> None:
+    with pytest.raises(ValueError, match="short GSM-status"):
+        m.decode_gsm_status(_gsm_resp()[:80])
+
+
+async def test_gsm_status_over_the_persistent_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairs = _patch_sessions(monkeypatch, [[_resp(_gsm_resp(result=m.GSM_NO_MODULE))]])
+    client = m.Local6004Client("host", "pass")
+    status = await client.async_get_gsm_status()
+    assert status.result == m.GSM_NO_MODULE
+    assert _decrypt(pairs[0][1].sent[0]) == b"\x5e\x00\x00\x00" + bytes(32)
 
 
 # --------------------------------------------------------------- output states

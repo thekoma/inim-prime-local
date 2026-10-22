@@ -18,6 +18,8 @@ from custom_components.inim_prime.client import (
     Fault,
     Local6004Config,
     Local6004Error,
+    PanelStatus,
+    Power,
     Scenario,
     SceneDef,
     Version,
@@ -30,7 +32,7 @@ from custom_components.inim_prime.coordinator import InimData, InimDataUpdateCoo
 
 def _data(area_modes: dict[int, AreaMode]) -> InimData:
     return InimData(
-        version=Version(raw="4.07 PX020", service=False),
+        version=Version(raw="4.07 PX020"),
         areas=[
             Area(id=aid, label=f"Area {aid}", mode=mode, state=AreaState.READY, alarm_memory=False)
             for aid, mode in area_modes.items()
@@ -48,6 +50,8 @@ def _data(area_modes: dict[int, AreaMode]) -> InimData:
         scenarios=[Scenario(id=0, label="Arm garage", active=False)],
         outputs=[],
         fault=Fault(vcc=13.7, has_faults=False),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
 
 

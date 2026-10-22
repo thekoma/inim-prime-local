@@ -6,6 +6,24 @@
       },
       "open_zone_count": {
         "default": "mdi:door-open"
+      },
+      "battery_voltage": {
+        "default": "mdi:car-battery"
+      },
+      "battery_temperature": {
+        "default": "mdi:thermometer"
+      },
+      "battery_resistance": {
+        "default": "mdi:omega"
+      },
+      "gsm_signal": {
+        "default": "mdi:signal-cellular-outline",
+        "range": {
+          "0": "mdi:signal-cellular-outline",
+          "1": "mdi:signal-cellular-1",
+          "34": "mdi:signal-cellular-2",
+          "67": "mdi:signal-cellular-3"
+        }
       }
     },
     "binary_sensor": {
@@ -58,6 +76,18 @@
         "default": "mdi:window-shutter",
         "state": {
           "on": "mdi:window-shutter-alert"
+        }
+      },
+      "service_mode": {
+        "default": "mdi:wrench-outline",
+        "state": {
+          "on": "mdi:wrench"
+        }
+      },
+      "programming_mode": {
+        "default": "mdi:pencil-off-outline",
+        "state": {
+          "on": "mdi:pencil"
         }
       }
     },

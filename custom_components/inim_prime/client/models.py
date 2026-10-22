@@ -11,8 +11,6 @@ from .const import AreaMode, AreaState, ZoneState
 class Version:
     # The panel's version string as read natively, e.g. "5.00 PX020".
     raw: str
-    # The panel is in service (its SERV jumper is set).
-    service: bool
 
     @property
     def firmware(self) -> str:
@@ -96,3 +94,34 @@ class Fault:
     flags: dict[str, bool] = field(default_factory=_all_flags_false)
     # The fault word and panel flags as read (hex), for diagnostics.
     raw: str = ""
+    # Which device reports a tamper: panel_dislodged, panel_open, readers,
+    # keypads, expansions.
+    tamper_sources: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Power:
+    battery_voltage: float
+    # From the power values, read less often: None until read, or when the
+    # panel does not report them.
+    battery_temperature: int | None = None  # degrees Celsius
+    battery_resistance: int | None = None  # internal resistance, milliohm
+
+
+@dataclass(frozen=True)
+class Gsm:
+    # "ok", "not_initialised" (Prime/STUDIO: check the SIM) or "error".
+    state: str
+    signal: int | None  # 0-100, None unless the state is "ok"
+    networks: tuple[str, ...]  # e.g. ("2G", "3G", "4G")
+    operator_code: str  # MCC+MNC, "" when not registered
+    volte: bool
+    faults: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PanelStatus:
+    # The SERV jumper is set: the panel is in service (maintenance).
+    service: bool
+    # A programming session (Prime/STUDIO or the keypad) is open.
+    programming: bool

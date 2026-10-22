@@ -19,6 +19,8 @@ from custom_components.inim_prime.client import (
     NativeCommandUncertain,
     NativeZoneStatus,
     Output,
+    PanelStatus,
+    Power,
     Version,
     Zone,
     ZoneState,
@@ -66,12 +68,14 @@ def zones() -> list[Zone]:
 def fake_coordinator(outputs, zones):
     """Build a fake coordinator with sample InimData and a native client."""
     data = InimData(
-        version=Version(raw="4.07 PX500", service=False),
+        version=Version(raw="4.07 PX500"),
         areas=[],
         zones=zones,
         scenarios=[],
         outputs=outputs,
         fault=Fault(vcc=13.5, has_faults=False),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     client = AsyncMock()
     client.supports_native_writes = True

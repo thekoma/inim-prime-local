@@ -72,6 +72,18 @@
       },
       "open_zone_count": {
         "name": "Open zones"
+      },
+      "battery_voltage": {
+        "name": "Battery voltage"
+      },
+      "battery_temperature": {
+        "name": "Battery temperature"
+      },
+      "battery_resistance": {
+        "name": "Battery internal resistance"
+      },
+      "gsm_signal": {
+        "name": "GSM signal"
       }
     },
     "binary_sensor": {
@@ -122,6 +134,12 @@
       },
       "shutter": {
         "name": "Roller shutter"
+      },
+      "service_mode": {
+        "name": "Service mode"
+      },
+      "programming_mode": {
+        "name": "Programming mode"
       }
     },
     "switch": {

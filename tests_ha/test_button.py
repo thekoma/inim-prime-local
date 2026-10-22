@@ -25,6 +25,8 @@ from custom_components.inim_prime.client import (
     Local6004Structure,
     NativeCommandNotSent,
     NativeZonesNotReady,
+    PanelStatus,
+    Power,
     Scenario,
     SceneDef,
     Version,
@@ -32,7 +34,7 @@ from custom_components.inim_prime.client import (
 from custom_components.inim_prime.const import DOMAIN
 from custom_components.inim_prime.coordinator import InimData
 
-_VERSION = Version(raw="4.07 PX500", service=False)
+_VERSION = Version(raw="4.07 PX500")
 
 
 def _make_coordinator(areas: list[Area], scenarios: list[Scenario] | None = None) -> MagicMock:
@@ -59,6 +61,8 @@ def _make_coordinator(areas: list[Area], scenarios: list[Scenario] | None = None
         scenarios=scenarios or [],
         outputs=[],
         fault=Fault(vcc=13.7, has_faults=False),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     return coordinator
 
@@ -177,6 +181,8 @@ def test_buttons_of_missing_objects(two_areas) -> None:
         scenarios=[],
         outputs=[],
         fault=Fault(vcc=13.7, has_faults=False),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     assert clear.available is False
     assert clear.name == "Home clear alarm memory"
