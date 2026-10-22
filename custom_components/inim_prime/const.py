@@ -51,6 +51,15 @@ LABEL_LANGUAGE_AUTO: Final = "auto"
 CONF_GROUP_BY_ROOM: Final = "group_by_room"
 DEFAULT_GROUP_BY_ROOM: Final = True
 
+# Require the panel to verify a user code before any arm/disarm. Off by default:
+# the LAN password is the sole credential the panel checks on 6004, so enabling
+# this makes Home Assistant ask for an INIM user code and have the PANEL validate
+# it (op 0x04) before sending the command. The code is never stored. With it on,
+# the one-tap scenario buttons are disabled (a button cannot prompt for a code);
+# use the area alarm panels, which show a keypad.
+CONF_REQUIRE_CODE: Final = "require_code"
+DEFAULT_REQUIRE_CODE: Final = False
+
 # Which panel areas get entities, as area ids (strings, the options flow's
 # value type). Unset until the owner saves a selection: every area with a real
 # (non-factory) name is shown. See areas.py.

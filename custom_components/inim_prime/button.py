@@ -157,8 +157,17 @@ class InimApplyScenarioButton(
 
     @property
     def available(self) -> bool:
-        """Return True if the backing scenario is still present."""
-        return super().available and self._scenario is not None
+        """Return True if the backing scenario is still present and usable.
+
+        With the "require code" option on, the one-tap scenario buttons are
+        disabled: a button cannot prompt for a code, so arming must go through the
+        area alarm panels (which show a keypad). The options screen explains this.
+        """
+        return (
+            super().available
+            and self._scenario is not None
+            and not self.coordinator.require_code
+        )
 
     @property
     def name(self) -> str | None:

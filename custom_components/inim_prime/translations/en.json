@@ -55,12 +55,14 @@
           "areas": "Areas to show",
           "webhook_enabled": "Enable realtime push (local webhook)",
           "label_language": "Zone label language (for icon guessing)",
-          "group_by_room": "Group zones by room"
+          "group_by_room": "Group zones by room",
+          "require_code": "Require a user code to arm or disarm"
         },
         "data_description": {
           "areas": "Panel areas that get entities in Home Assistant (alarm panel, alarm memory, clear button). The choice is kept by area number, so renaming an area on the panel keeps it. Unselected areas get no entities (existing ones are removed) but still work in scenarios and commands. Areas added on the panel later stay hidden until you select them here.",
           "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language.",
-          "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area."
+          "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area.",
+          "require_code": "When on, Home Assistant asks for an INIM user code and the panel validates it before each arm or disarm. The code is never stored. By default the panel accepts any command over the LAN once the protocol password is known, so this adds a per-user check on Home Assistant's side. The one-tap scenario buttons are disabled while this is on, because a button cannot prompt for a code — use the area alarm panels, which show a keypad."
         }
       }
     }
@@ -156,6 +158,15 @@
   "exceptions": {
     "zones_not_ready": {
       "message": "The command was rejected because one or more zones are not ready (open or in fault)."
+    },
+    "code_required": {
+      "message": "A user code is required to arm or disarm this area."
+    },
+    "invalid_code": {
+      "message": "The panel rejected that code. Check the INIM user code and that it is allowed on this area."
+    },
+    "code_check_failed": {
+      "message": "Could not verify the code with the panel, so nothing was armed or disarmed: {error}"
     },
     "command_failed": {
       "message": "The panel command failed: {error}"

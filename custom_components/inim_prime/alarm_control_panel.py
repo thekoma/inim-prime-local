@@ -8,14 +8,17 @@ from homeassistant.components.alarm_control_panel import AlarmControlPanelEntity
 from homeassistant.components.alarm_control_panel.const import (
     AlarmControlPanelEntityFeature,
     AlarmControlPanelState,
+    CodeFormat,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .areas import area_shown
-from .client import Area, AreaMode, AreaState, ArmMode
+from .client import Area, AreaMode, AreaState, ArmMode, Local6004Error
 from .commands import async_arm_area
+from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
 
@@ -29,6 +32,10 @@ _MODE_TO_STATE: dict[AreaMode, AlarmControlPanelState] = {
     AreaMode.PARTIAL: AlarmControlPanelState.ARMED_HOME,
     AreaMode.SNAPSHOT: AlarmControlPanelState.ARMED_NIGHT,
 }
+
+# A user code is accepted as 1-6 digits (an INIM user PIN); the panel is the one
+# that validates it (op 0x04). The frontend keypad uses this format.
+_CODE_FORMAT = CodeFormat.NUMBER
 
 
 async def async_setup_entry(
@@ -92,6 +99,12 @@ class InimAlarmControlPanel(
         self._attr_unique_id = f"{entry.entry_id}_area_{area_id}"
         self._attr_device_info = panel_device_info(coordinator)
         self._last_label = self._area.label if self._area else None
+        # When the "require code" option is on, the panel validates an INIM user
+        # code (op 0x04) before every arm and disarm; the frontend shows a keypad.
+        self._require_code = coordinator.require_code
+        if self._require_code:
+            self._attr_code_arm_required = True
+            self._attr_code_format = _CODE_FORMAT
 
     @property
     def _area(self) -> Area | None:
@@ -158,6 +171,30 @@ class InimAlarmControlPanel(
         self._optimistic_state = state
         self.async_write_ha_state()
 
+    async def _verify_code(self, code: str | None) -> None:
+        """Have the panel validate ``code`` when the require-code option is on.
+
+        No-op when the option is off. Otherwise the code is checked against the
+        panel (op 0x04, read-only) and never stored: a missing or malformed code
+        raises :class:`ServiceValidationError`, one the panel rejects raises
+        ``invalid_code``, and a panel that cannot be reached raises
+        ``code_check_failed`` so the command is not sent on an unverified code.
+        """
+        if not self._require_code:
+            return
+        if not code:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key="code_required")
+        try:
+            result = await self.coordinator.client.async_check_code(code)
+        except Local6004Error as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="code_check_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        if not result.valid:
+            raise ServiceValidationError(translation_domain=DOMAIN, translation_key="invalid_code")
+
     async def _arm(self, mode: ArmMode, optimistic: AlarmControlPanelState) -> None:
         """Arm (or disarm) the area, optimistically updating state.
 
@@ -169,16 +206,20 @@ class InimAlarmControlPanel(
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm command."""
+        await self._verify_code(code)
         await self._arm(ArmMode.DISARM, AlarmControlPanelState.DISARMED)
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         """Send arm away command."""
+        await self._verify_code(code)
         await self._arm(ArmMode.TOTAL, AlarmControlPanelState.ARMED_AWAY)
 
     async def async_alarm_arm_home(self, code: str | None = None) -> None:
         """Send arm home command."""
+        await self._verify_code(code)
         await self._arm(ArmMode.PARTIAL, AlarmControlPanelState.ARMED_HOME)
 
     async def async_alarm_arm_night(self, code: str | None = None) -> None:
         """Send arm night command."""
+        await self._verify_code(code)
         await self._arm(ArmMode.SNAPSHOT, AlarmControlPanelState.ARMED_NIGHT)

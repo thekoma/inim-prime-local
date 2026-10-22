@@ -17,6 +17,7 @@ from custom_components.inim_prime.const import (
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
+    CONF_REQUIRE_CODE,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DOMAIN,
@@ -225,7 +226,7 @@ async def _setup_entry(hass: HomeAssistant, entry: MockConfigEntry) -> None:
 async def test_options_form_has_no_polling_fields(
     hass: HomeAssistant, patch_client: AsyncMock
 ) -> None:
-    """Only the areas, push mode, label language and room grouping are offered."""
+    """Only the areas, push mode, label language, room grouping and require-code."""
     entry = _add_entry(hass)
     await _setup_entry(hass, entry)
 
@@ -237,7 +238,32 @@ async def test_options_form_has_no_polling_fields(
         CONF_WEBHOOK_ENABLED,
         CONF_LABEL_LANGUAGE,
         CONF_GROUP_BY_ROOM,
+        CONF_REQUIRE_CODE,
     }
+
+
+async def test_options_require_code_saved(
+    hass: HomeAssistant, patch_client: AsyncMock
+) -> None:
+    """Turning on 'require code' is stored in the entry options (off by default)."""
+    entry = _add_entry(hass)
+    await _setup_entry(hass, entry)
+    assert entry.options.get(CONF_REQUIRE_CODE, False) is False
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_WEBHOOK_ENABLED: False,
+            CONF_LABEL_LANGUAGE: "en",
+            CONF_GROUP_BY_ROOM: True,
+            CONF_REQUIRE_CODE: True,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_REQUIRE_CODE] is True
 
 
 async def test_options_enable_push_generates_a_stable_webhook(

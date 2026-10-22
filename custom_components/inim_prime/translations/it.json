@@ -55,12 +55,14 @@
           "areas": "Aree da mostrare",
           "webhook_enabled": "Abilita push realtime (webhook locale)",
           "label_language": "Lingua dei nomi zona (per le icone)",
-          "group_by_room": "Raggruppa le zone per stanza"
+          "group_by_room": "Raggruppa le zone per stanza",
+          "require_code": "Richiedi un codice utente per inserire o disinserire"
         },
         "data_description": {
           "areas": "Aree della centrale che hanno entità in Home Assistant (pannello allarme, memoria allarme, pulsante di reset). La scelta è legata al numero dell'area, quindi rinominare un'area in centrale non la cambia. Le aree non selezionate non hanno entità (quelle esistenti vengono rimosse) ma continuano a funzionare negli scenari e nei comandi. Le aree aggiunte in centrale in seguito restano nascoste finché non le selezioni qui.",
           "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant.",
-          "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant."
+          "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant.",
+          "require_code": "Se attivo, Home Assistant chiede un codice utente INIM e la centrale lo verifica prima di ogni inserimento o disinserimento. Il codice non viene mai salvato. Di default la centrale accetta qualsiasi comando sulla LAN una volta nota la password di protocollo, quindi questo aggiunge un controllo per utente lato Home Assistant. Con l'opzione attiva i pulsanti scenario (un tocco) sono disabilitati, perché un pulsante non può chiedere un codice: usa i pannelli allarme delle aree, che mostrano un tastierino."
         }
       }
     }
@@ -156,6 +158,15 @@
   "exceptions": {
     "zones_not_ready": {
       "message": "Il comando è stato rifiutato perché una o più zone non sono pronte (aperte o in guasto)."
+    },
+    "code_required": {
+      "message": "Serve un codice utente per inserire o disinserire quest'area."
+    },
+    "invalid_code": {
+      "message": "La centrale ha rifiutato quel codice. Controlla il codice utente INIM e che sia abilitato su quest'area."
+    },
+    "code_check_failed": {
+      "message": "Non è stato possibile verificare il codice con la centrale, quindi non è stato inserito né disinserito nulla: {error}"
     },
     "command_failed": {
       "message": "Il comando alla centrale è fallito: {error}"

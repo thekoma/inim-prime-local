@@ -34,11 +34,13 @@ from .const import (
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
+    CONF_REQUIRE_CODE,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DEFAULT_GROUP_BY_ROOM,
     DEFAULT_LOCAL_PASSWORD,
     DEFAULT_NAME,
+    DEFAULT_REQUIRE_CODE,
     DOMAIN,
     LABEL_LANGUAGE_AUTO,
     LOCAL_6004_PORT,
@@ -267,6 +269,10 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                     vol.Required(
                         CONF_GROUP_BY_ROOM,
                         default=options.get(CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM),
+                    ): bool,
+                    vol.Required(
+                        CONF_REQUIRE_CODE,
+                        default=options.get(CONF_REQUIRE_CODE, DEFAULT_REQUIRE_CODE),
                     ): bool,
                 }
             ),

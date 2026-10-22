@@ -73,6 +73,9 @@ _EXPECTED_BINARY_SENSOR_KEYS = {
 _EXPECTED_EXCEPTION_KEYS = {
     "bypass_not_applied",
     "zones_not_ready",
+    "code_required",
+    "invalid_code",
+    "code_check_failed",
     "command_failed",
     "scenario_not_supported",
     "forced_arm_bad_target",
@@ -116,6 +119,7 @@ def test_config_translations_are_native_only(name: str) -> None:
         "webhook_enabled",
         "label_language",
         "group_by_room",
+        "require_code",
     }
 
 
