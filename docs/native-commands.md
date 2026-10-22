@@ -43,7 +43,7 @@ A command is `[op:4 LE][PIN:6][data]`, AES-encrypted in the usual 6004 frame wit
 | Command | Data | Example (plaintext body) |
 |---|---|---|
 | op 3 set arming status | 30 bytes, one per partition (0-based): 1 Total, 2 Partial, 3 Instant/snapshot, 4 Disarmed, 0 untouched | area 4 → Total: `03000000 740000000000` + `00000000 01` + 25 × `00` |
-| op 9 set zone bypass | `[zone:2 LE][0 bypass / 2 unbypass:2 LE]` | bypass zone 12: `09000000 740000000000 0c00 0000` |
+| op 9 set zone bypass | `[terminal:2 LE][0 bypass / 2 unbypass, +1 for the terminal's second zone:2 LE]` | bypass zone 12: `09000000 740000000000 0c00 0000`; on 5.00 bypass zone 1521 (terminal 16, second zone): `… 1000 0100` |
 | op 8 set output | `[terminal:2 LE][1 on / 0 off:2 LE]` | output 1007 on: `08000000 740000000000 ef03 0100` |
 | op 16 reset partitions | `[partition bitmask:4 LE]` | reset area 4: `10000000 740000000000 10000000` |
 

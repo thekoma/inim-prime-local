@@ -34,7 +34,8 @@ Write commands (same source, not yet live-verified by this project): request
 * op 3 set arming status: 30 bytes, one per partition, holding the target
   :class:`AreaMode` (0 = leave that partition alone);
 * op 8 set output: ``[terminal:2 LE][1 on | 0 off:2 LE]``;
-* op 9 set zone bypass: ``[zone:2 LE][0 bypass | 2 unbypass:2 LE]``;
+* op 9 set zone bypass: ``[terminal:2 LE][0 bypass | 2 unbypass:2 LE]``,
+  plus 1 in the value for the terminal's second zone (half B);
 * op 16 reset partitions (alarm memory): ``[partition bitmask:4 LE]``.
 
 Pitscheider's library does not decode the command response ("complete
@@ -166,10 +167,12 @@ _PIN_LEN = 6
 _PIN_PAD = 0xFF
 _OUTPUT_ON = 1
 _OUTPUT_OFF = 0
-# Pitscheider: bypass -> 0, un-bypass -> 2 (1 is not used there).
+# Pitscheider: bypass -> 0, un-bypass -> 2. Bit 0 picks the terminal's second
+# zone (half B): Prime/STUDIO on 5.00 bypasses zone 16 + half_offset by sending
+# terminal 16 with 1, and un-bypasses it with 3 (captured live).
 _BYPASS_ON = 0
 _BYPASS_OFF = 2
-_ZONE_ID_COUNT = 2 * SECOND_HALF_ZONE_OFFSET
+_BYPASS_HALF_B = 1
 # Bytes of the response header that echo the opcode (as its bitwise NOT).
 _ECHO_LEN = 4
 # Per-command ceiling for a write: a liveness read (itself capped at
@@ -447,12 +450,20 @@ def reset_data(area_ids: Iterable[int]) -> bytes:
     return mask.to_bytes(4, "little")
 
 
-def zone_bypass_data(zone_id: int, excluded: bool) -> bytes:
-    """Encode op 9 data: ``[zone:2 LE][0 bypass | 2 unbypass:2 LE]``."""
-    if not 0 <= zone_id < _ZONE_ID_COUNT:
+def zone_bypass_data(
+    zone_id: int, excluded: bool, half_offset: int = SECOND_HALF_ZONE_OFFSET
+) -> bytes:
+    """Encode op 9 data: ``[terminal:2 LE][0 bypass | 2 unbypass, +1 half B:2 LE]``.
+
+    The panel addresses the zone by its terminal, and bit 0 of the value picks
+    the terminal's second zone (``terminal + half_offset``). Sent as the zone id,
+    a second-half zone is answered with an error status and left as it was.
+    """
+    if not 0 <= zone_id < 2 * half_offset:
         raise ValueError(f"zone id {zone_id} out of range")
-    value = _BYPASS_ON if excluded else _BYPASS_OFF
-    return zone_id.to_bytes(2, "little") + value.to_bytes(2, "little")
+    terminal, half = zone_terminal(zone_id, half_offset)
+    value = (_BYPASS_ON if excluded else _BYPASS_OFF) | (_BYPASS_HALF_B if half else 0)
+    return terminal.to_bytes(2, "little") + value.to_bytes(2, "little")
 
 
 def output_data(
@@ -1002,7 +1013,8 @@ class Local6004Client:
         timeout: float = COMMAND_TIMEOUT,
     ) -> None:
         """Bypass (exclude) or un-bypass a zone (op 9)."""
-        data = _validated(_OP_SET_ZONE_BYPASS, lambda: zone_bypass_data(zone_id, excluded))
+        half = self._layout.half_offset
+        data = _validated(_OP_SET_ZONE_BYPASS, lambda: zone_bypass_data(zone_id, excluded, half))
         await self._command(_OP_SET_ZONE_BYPASS, data, pin, timeout)
 
     async def async_set_output(
