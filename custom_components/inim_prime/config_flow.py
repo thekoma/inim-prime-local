@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import voluptuous as vol
@@ -27,13 +28,14 @@ from homeassistant.helpers.selector import (
 )
 
 from .areas import default_area_selection
-from .client import Area, Local6004Client, Local6004Error
+from .client import Area, Local6004Client, Local6004Error, Scenario, SceneDef
 from .const import (
     CONF_AREAS,
     CONF_AREAS_OFFERED,
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
+    CONF_PANELS,
     CONF_REQUIRE_CODE,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
@@ -46,6 +48,7 @@ from .const import (
     LOCAL_6004_PORT,
 )
 from .coordinator import InimConfigEntry
+from .panels import PanelDef, PanelKind, inverse_scenario_pairs, load_panels
 from .zone_guess import SUPPORTED_LANGUAGES
 
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
@@ -189,7 +192,13 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
     """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Manage the options."""
+        """Show the options menu: the settings form, or panel management."""
+        return self.async_show_menu(step_id="init", menu_options=["settings", "panels"])
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """The settings form: areas, push mode, label language, grouping, code."""
         options = dict(self.config_entry.options)
         areas = _panel_areas(self.config_entry)
 
@@ -248,7 +257,7 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
             )
 
         return self.async_show_form(
-            step_id="init",
+            step_id="settings",
             data_schema=vol.Schema(
                 {
                     **schema,
@@ -278,6 +287,185 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
             ),
         )
 
+    # ------------------------------------------------------------------ panels
+    def _current_panels(self) -> list[PanelDef]:
+        """The panels currently stored for this entry."""
+        return load_panels(self.config_entry.options.get(CONF_PANELS))
+
+    def _save_panels(self, panels: list[PanelDef]) -> ConfigFlowResult:
+        """Persist the panel list (reloads the entry via OptionsFlowWithReload)."""
+        new_options = {
+            **self.config_entry.options,
+            CONF_PANELS: [panel.to_dict() for panel in panels],
+        }
+        return self.async_create_entry(data=new_options)
+
+    async def async_step_panels(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Panel-management menu, with only the actions that apply."""
+        menu: list[str] = []
+        if inverse_scenario_pairs(_scenes(self.config_entry)):
+            menu.append("panel_add_inverse")
+        menu.append("panel_add_areas")
+        if _scenarios(self.config_entry):
+            menu.append("panel_add_scenarios")
+        if self._current_panels():
+            menu.append("panel_remove")
+        return self.async_show_menu(step_id="panels", menu_options=menu)
+
+    async def async_step_panel_add_areas(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Create an areas panel from a chosen set of partitions."""
+        areas = _panel_areas(self.config_entry)
+        if not areas:
+            return self.async_abort(reason="no_areas")
+        if user_input is not None:
+            panels = self._current_panels()
+            panels.append(
+                PanelDef(
+                    id=uuid.uuid4().hex[:8],
+                    kind=PanelKind.AREAS,
+                    name=user_input["name"],
+                    areas=tuple(int(a) for a in user_input["areas"]),
+                )
+            )
+            return self._save_panels(panels)
+        return self.async_show_form(
+            step_id="panel_add_areas",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("name"): str,
+                    vol.Required("areas"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(
+                                    value=str(area.id),
+                                    label=" ".join(area.label.split()) or str(area.id + 1),
+                                )
+                                for area in areas
+                            ],
+                            multiple=True,
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_panel_add_scenarios(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Create a panel from an arm scenario plus a disarm scenario.
+
+        Only reachable from the panels menu, which lists this action only while
+        the panel has scenarios, so the lists below are never empty.
+        """
+        scenarios = _scenarios(self.config_entry)
+        if user_input is not None:
+            panels = self._current_panels()
+            panels.append(
+                PanelDef(
+                    id=uuid.uuid4().hex[:8],
+                    kind=PanelKind.SCENARIOS,
+                    name=user_input["name"],
+                    arm_scenario=int(user_input["arm_scenario"]),
+                    disarm_scenario=int(user_input["disarm_scenario"]),
+                )
+            )
+            return self._save_panels(panels)
+        choices = [
+            SelectOptionDict(value=str(s.id), label=" ".join(s.label.split()) or str(s.id))
+            for s in scenarios
+        ]
+        selector = SelectSelector(
+            SelectSelectorConfig(options=choices, mode=SelectSelectorMode.DROPDOWN)
+        )
+        return self.async_show_form(
+            step_id="panel_add_scenarios",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("name"): str,
+                    vol.Required("arm_scenario"): selector,
+                    vol.Required("disarm_scenario"): selector,
+                }
+            ),
+        )
+
+    async def async_step_panel_add_inverse(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Create panels from auto-detected inverse scenario pairs (you pick which).
+
+        Only reachable from the panels menu, which lists this action only when at
+        least one inverse pair exists, so ``pairs`` below is never empty.
+        """
+        pairs = inverse_scenario_pairs(_scenes(self.config_entry))
+        labels = {s.id: " ".join(s.label.split()) for s in _scenarios(self.config_entry)}
+        if user_input is not None:
+            panels = self._current_panels()
+            for key in user_input.get("pairs", []):
+                arm_id, disarm_id = (int(part) for part in key.split(":"))
+                panels.append(
+                    PanelDef(
+                        id=uuid.uuid4().hex[:8],
+                        kind=PanelKind.SCENARIOS,
+                        name=labels.get(arm_id) or f"Panel {arm_id}",
+                        arm_scenario=arm_id,
+                        disarm_scenario=disarm_id,
+                    )
+                )
+            return self._save_panels(panels)
+        choices = [
+            SelectOptionDict(
+                value=f"{arm_id}:{disarm_id}",
+                label=f"{labels.get(arm_id) or arm_id} / {labels.get(disarm_id) or disarm_id}",
+            )
+            for arm_id, disarm_id in pairs
+        ]
+        return self.async_show_form(
+            step_id="panel_add_inverse",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("pairs"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=choices, multiple=True, mode=SelectSelectorMode.LIST
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_panel_remove(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Remove one or more existing panels.
+
+        Only reachable from the panels menu, which lists this action only while
+        panels exist, so ``panels`` below is never empty.
+        """
+        panels = self._current_panels()
+        if user_input is not None:
+            remove = set(user_input.get("remove", []))
+            return self._save_panels([p for p in panels if p.id not in remove])
+        return self.async_show_form(
+            step_id="panel_remove",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("remove"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(value=p.id, label=p.name) for p in panels
+                            ],
+                            multiple=True,
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+        )
+
 
 def _panel_areas(entry: InimConfigEntry) -> list[Area]:
     """Return the panel areas of a loaded entry, or [] while it is not loaded."""
@@ -285,3 +473,19 @@ def _panel_areas(entry: InimConfigEntry) -> list[Area]:
     if runtime is None or runtime.coordinator.data is None:
         return []
     return list(runtime.coordinator.data.areas)
+
+
+def _scenarios(entry: InimConfigEntry) -> list[Scenario]:
+    """Return the panel scenarios (with labels) of a loaded entry, or []."""
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is None or runtime.coordinator.data is None:
+        return []
+    return list(runtime.coordinator.data.scenarios)
+
+
+def _scenes(entry: InimConfigEntry) -> list[SceneDef]:
+    """Return the scenario definitions (target modes) of a loaded entry, or []."""
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is None:
+        return []
+    return list(runtime.coordinator.local_config.scenes)

@@ -60,6 +60,11 @@ DEFAULT_GROUP_BY_ROOM: Final = True
 CONF_REQUIRE_CODE: Final = "require_code"
 DEFAULT_REQUIRE_CODE: Final = False
 
+# Multi-area alarm "panels": extra alarm_control_panel entities that arm/disarm
+# several partitions at once. Stored as a list of name-agnostic definitions (ids
+# only; see panels.py). Managed from the options flow.
+CONF_PANELS: Final = "panels"
+
 # Which panel areas get entities, as area ids (strings, the options flow's
 # value type). Unset until the owner saves a selection: every area with a real
 # (non-factory) name is shown. See areas.py.

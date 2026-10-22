@@ -132,6 +132,18 @@ async def async_arm_area(
     await _async_run(coordinator, f"{mode.name.lower()} of area {area_id}", native)
 
 
+async def async_set_areas(
+    coordinator: InimDataUpdateCoordinator, modes: dict[int, AreaMode], what: str
+) -> None:
+    """Set several areas' modes in one op 3 (zones checked, fail-closed).
+
+    Used by the multi-area panels to arm or disarm their member partitions
+    together; ``what`` is a short label for the logs.
+    """
+    native = _area_modes(coordinator, modes)
+    await _async_run(coordinator, what, native)
+
+
 def scenario_modes(
     coordinator: InimDataUpdateCoordinator, scenario_id: int
 ) -> dict[int, AreaMode]:
