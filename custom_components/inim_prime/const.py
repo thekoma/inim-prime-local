@@ -56,6 +56,14 @@ LABEL_LANGUAGE_AUTO: Final = "auto"
 CONF_GROUP_BY_ROOM: Final = "group_by_room"
 DEFAULT_GROUP_BY_ROOM: Final = True
 
+# Which panel areas get entities, as area ids (strings, the options flow's
+# value type). Unset until the owner saves a selection: every area with a real
+# (non-factory) name is shown. See areas.py.
+CONF_AREAS: Final = "areas"
+# The area ids the selection was made from, so an area added on the panel
+# afterwards can be told apart from one the owner deselected.
+CONF_AREAS_OFFERED: Final = "areas_offered"
+
 # Fast area-state polling over the native TCP 6004 status command (~10 ms per
 # read, vs seconds for the cgi on a loaded panel). The cgi poll stays on as
 # the full-state reconciliation path.

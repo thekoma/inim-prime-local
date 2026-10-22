@@ -7,8 +7,9 @@ These drive the *real* integration end-to-end through ``hass`` (full
   next update (and not again on subsequent updates);
 * a panel-side label change is reflected by the entity's friendly name;
 * a removed object id makes its entity ``unavailable`` (not deleted);
-* the declutter gating still applies to a *dynamically-added* factory-default
-  area and to a dynamically-added output switch;
+* a *dynamically-added* factory-default area gets no entities (the default
+  area selection), and a dynamically-added output switch keeps the declutter
+  gating;
 * no duplicate entities appear after several coordinator updates.
 
 The object lists here are driven by the cgi, so these tests run without a
@@ -163,24 +164,22 @@ async def test_removed_zone_becomes_unavailable(
     assert _count(hass, entry, f"{entry.entry_id}_zone_1") == 1
 
 
-async def test_dynamic_factory_default_area_disabled(
+async def test_dynamic_factory_default_area_not_created(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     patch_client: AsyncMock,
     sample_areas,
 ) -> None:
-    """A dynamically-added factory-default area is disabled by default."""
+    """A dynamically-added factory-default area gets no entities by default."""
     entry, client = await _setup(hass, mock_config_entry, patch_client)
 
     client.get_areas.return_value = [*sample_areas, _area(6, "AREA       006 ")]
     await _refresh(hass, entry)
 
-    registry = er.async_get(hass)
-    entity_id = registry.async_get_entity_id(
-        "alarm_control_panel", "inim_prime", f"{entry.entry_id}_area_6"
-    )
-    assert entity_id is not None
-    assert registry.entities[entity_id].disabled_by is not None
+    for uid in ("area_6", "area_memory_6", "button_6"):
+        assert _count(hass, entry, f"{entry.entry_id}_{uid}") == 0
+    # The area itself stays in the data, for commands and scenarios.
+    assert 6 in {area.id for area in entry.runtime_data.coordinator.data.areas}
 
 
 async def test_dynamic_output_switch_disabled(

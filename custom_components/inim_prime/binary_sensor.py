@@ -13,8 +13,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .areas import area_shown
 from .client import FAULT_FLAG_KEYS, Area, Scenario, Zone, ZoneState
-from .const import is_factory_default_area
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import (
     group_zones_by_room,
@@ -40,8 +40,10 @@ async def async_setup_entry(
     Per-object sensors (zones, per-area alarm-memory, per-scenario) are added
     dynamically via a coordinator listener so objects appearing after setup show
     up without a reload. The fixed sensors (the "System fault" summary and the
-    per-flag fault sensors) are added once on the first sync. Removed objects are
-    not deleted from the registry; their entity reports ``available = False``.
+    per-flag fault sensors) are added once on the first sync. Alarm-memory sensors
+    exist only for the areas the area selection shows (see areas.py). Removed
+    objects are not deleted from the registry; their entity reports
+    ``available = False``.
     """
     coordinator = entry.runtime_data.coordinator
     known: set[str] = set()
@@ -66,7 +68,8 @@ async def async_setup_entry(
         for zone in coordinator.data.zones:
             _add(InimZoneBinarySensor(coordinator, zone.id))
         for area in coordinator.data.areas:
-            _add(InimAreaAlarmMemoryBinarySensor(coordinator, area.id))
+            if area_shown(hass, entry, area):
+                _add(InimAreaAlarmMemoryBinarySensor(coordinator, area.id))
         # Multi-active scene sensors, enabled by default. Computed from the 6004
         # scenario definitions vs live area state, so several scenes can read
         # "on" at once — the accurate view the panel's single ``st`` flag cannot
@@ -194,12 +197,7 @@ class InimAreaAlarmMemoryBinarySensor(InimBaseBinarySensor):
         entry = coordinator.config_entry
         self._attr_unique_id = f"{entry.entry_id}_area_memory_{area_id}"
         area = self._area
-        label = area.label if area is not None else None
-        self._last_label = label
-        # Hide unused, factory-default areas ("AREA 006"..) by default. Gating is
-        # fixed at add time from the label the area first had.
-        if label is not None and is_factory_default_area(label):
-            self._attr_entity_registry_enabled_default = False
+        self._last_label = area.label if area is not None else None
 
     @property
     def _area(self) -> Area | None:

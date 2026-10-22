@@ -30,7 +30,7 @@ A **local, offline-first** Home Assistant integration for **INIM Prime / PrimeX*
 | 🧹 **Alarm memory** | `button` (one per area) | Clear alarm memory; per-area alarm-memory sensors |
 | 🩺 **Diagnostics** | `sensor` | API connection count, last API client, panel/firmware info |
 
-Unused **factory-default areas** (`AREA 006…`), the **output switches**, and the **per-scenario "active" sensors** are hidden by default so your entity list stays clean — re-enable any you actually use.
+Only the areas you choose get entities (**Options → Areas to show**, by area number; until you save a choice, every area with a real name is shown and unused factory-default ones like `AREA 006` are skipped). The **output switches** and the **per-scenario "active" sensors** are hidden by default so your entity list stays clean — re-enable any you actually use.
 
 **Which** areas, zones, scenarios and outputs exist, and their names, are read once at setup over the panel's native read-only TCP 6004 protocol, not from the cgi. On a PrimeX 4.07 this gives exactly the cgi's areas, zones and scenarios, and fixes the outputs: the cgi lists only two of them, named after zones (see [known limitations](docs/known-limitations.md)). Reload the integration after changing the panel programming.
 
