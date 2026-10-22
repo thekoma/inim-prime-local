@@ -114,8 +114,8 @@ class InimZoneBinarySensor(InimBaseBinarySensor):
             native = native_zone(coordinator, zone_id)
             self._attr_device_class = zone_device_class(native, zone.label, language)
             if native is not None and native.is_shutter:
-                # Binary sensors have no shutter class: keep "opening" and
-                # show shutter icons (icons.json) instead.
+                # A shutter detector senses movement ("moving"); show shutter
+                # icons (icons.json) on top of that class.
                 self._attr_translation_key = "shutter"
             # Group the zone under a per-room device when enabled and a room is
             # recognised in the label; otherwise it stays on the panel device.
