@@ -146,6 +146,11 @@
       "force_arm_on_open": {
         "name": "Force arm on open zones"
       }
+    },
+    "button": {
+      "clear_calls": {
+        "name": "Clear call queue"
+      }
     }
   },
   "exceptions": {

@@ -28,7 +28,7 @@ A **local, offline-first** Home Assistant integration for **INIM Prime / PrimeX*
 | ⚡ **Outputs** | `switch` (one per panel output) | Toggle panel outputs, named as programmed on the panel *(hidden by default)* |
 | 🔋 **Power & faults** | `sensor` + `binary_sensor` | Supply and battery voltage, battery temperature and internal resistance, open-zone count, system fault + a per-fault breakdown (mains, battery, tamper — with which device reports it —, GSM, …) |
 | 📶 **GSM / LTE** | `sensor` | Signal level, with networks, operator code, VoLTE and the communicator's faults as attributes (only on panels with the module) |
-| 🧹 **Alarm memory** | `button` (one per area) | Clear alarm memory; per-area alarm-memory sensors |
+| 🧹 **Alarm memory & calls** | `button` | Clear alarm memory (one per area), clear the call queue (the keypad's *Canc. telefonate*); per-area alarm-memory sensors |
 | 🩺 **Diagnostics** | `binary_sensor` + device page | Service mode (SERV jumper) and programming mode; panel model and firmware; downloadable diagnostics (LAN password redacted) |
 
 Only the areas you choose get entities (**Options → Areas to show**, by area number; until you save a choice, every area with a real name is shown and unused factory-default ones like `AREA 006` are skipped). The **output switches** and the **per-scenario "active" sensors** are hidden by default so your entity list stays clean — re-enable any you actually use.
