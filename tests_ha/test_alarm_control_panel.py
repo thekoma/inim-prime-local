@@ -402,3 +402,235 @@ async def test_arm_without_require_code_never_checks_code(entity_factory) -> Non
 
     client.async_check_code.assert_not_awaited()
     client.async_set_area_modes.assert_awaited_once()
+
+
+# --------------------------------------------------------------------- panels
+from custom_components.inim_prime.alarm_control_panel import (  # noqa: E402
+    InimPanelAlarmControl,
+)
+from custom_components.inim_prime.client import (  # noqa: E402
+    Local6004Structure,
+    SceneDef,
+)
+from custom_components.inim_prime.panels import PanelDef, PanelKind  # noqa: E402
+
+_PAIR_SCENES = [
+    SceneDef(id=2, arms={0: "away", 1: "away"}),
+    SceneDef(id=8, arms={0: "disarm", 1: "disarm"}),
+]
+
+
+def _panel_coordinator(
+    hass: HomeAssistant,
+    client: AsyncMock,
+    modes: dict[int, AreaMode],
+    *,
+    require_code: bool = False,
+    scenes: list[SceneDef] | None = None,
+    states: dict[int, AreaState] | None = None,
+    memory: dict[int, bool] | None = None,
+) -> InimDataUpdateCoordinator:
+    """Build a coordinator carrying several areas (and scenes) for panel tests."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="INIM Prime",
+        data={"host": "192.0.2.10", CONF_LOCAL_PASSWORD: "pass"},
+        options={CONF_REQUIRE_CODE: True} if require_code else {},
+        unique_id="192.0.2.10",
+        version=2,
+    )
+    entry.add_to_hass(hass)
+    config = Local6004Config(
+        firmware="4.07 PX500",
+        layout_ok=True,
+        scenes=scenes or [],
+        zone_areas={},
+        structure=Local6004Structure(areas=[], zones=[], scenarios=[], outputs=[]),
+    )
+    coordinator = InimDataUpdateCoordinator(hass, entry, client, config)
+    areas = [
+        Area(
+            id=area_id,
+            label=f"Area {area_id}",
+            mode=mode,
+            state=(states or {}).get(area_id, AreaState.READY),
+            alarm_memory=(memory or {}).get(area_id, False),
+        )
+        for area_id, mode in modes.items()
+    ]
+    coordinator.data = InimData(
+        version=Version(raw="4.07 PX500"),
+        areas=areas,
+        zones=[],
+        scenarios=[],
+        outputs=[],
+        fault=Fault(vcc=13.7, has_faults=False),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
+    )
+    coordinator.async_refresh = AsyncMock()
+    return coordinator
+
+
+def test_panel_areas_state_features_and_attrs(hass: HomeAssistant, mock_local_client) -> None:
+    """An all-armed areas panel reads armed_away and offers the three arm modes."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.TOTAL, 1: AreaMode.TOTAL}
+    )
+    panel = PanelDef(id="p1", kind=PanelKind.AREAS, name="House", areas=(0, 1))
+    entity = InimPanelAlarmControl(coordinator, panel)
+    assert entity.name == "House"
+    assert entity.alarm_state == AlarmControlPanelState.ARMED_AWAY
+    assert entity.available is True
+    assert entity.supported_features == (
+        AlarmControlPanelEntityFeature.ARM_AWAY
+        | AlarmControlPanelEntityFeature.ARM_HOME
+        | AlarmControlPanelEntityFeature.ARM_NIGHT
+    )
+    assert entity.extra_state_attributes == {"panel_kind": "areas", "members": [0, 1]}
+    assert entity.code_arm_required is False
+
+
+def test_panel_mixed_state_lists_members(hass: HomeAssistant, mock_local_client) -> None:
+    """A mixed areas panel reads armed_custom_bypass and lists the members."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.TOTAL, 1: AreaMode.DISARMED}
+    )
+    panel = PanelDef(id="p1", kind=PanelKind.AREAS, name="House", areas=(0, 1))
+    entity = InimPanelAlarmControl(coordinator, panel)
+    assert entity.alarm_state == AlarmControlPanelState.ARMED_CUSTOM_BYPASS
+    attrs = entity.extra_state_attributes
+    assert attrs["armed_areas"] == ["Area 0"]
+    assert attrs["disarmed_areas"] == ["Area 1"]
+
+
+def test_panel_unavailable_when_member_missing(hass: HomeAssistant, mock_local_client) -> None:
+    """A panel whose member area is absent from the data is unavailable."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.TOTAL, 1: AreaMode.TOTAL}
+    )
+    panel = PanelDef(id="p1", kind=PanelKind.AREAS, name="House", areas=(0, 1, 9))
+    entity = InimPanelAlarmControl(coordinator, panel)
+    assert entity.available is False
+    assert entity.alarm_state is None
+
+
+async def test_panel_arm_away_sends_all_members(hass: HomeAssistant, mock_local_client) -> None:
+    """Arming the panel sends one op 3 setting every member, then goes optimistic."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.DISARMED, 1: AreaMode.DISARMED}
+    )
+    panel = PanelDef(id="p1", kind=PanelKind.AREAS, name="House", areas=(0, 1))
+    entity = InimPanelAlarmControl(coordinator, panel)
+    entity.hass = hass
+    entity.entity_id = "alarm_control_panel.house"
+
+    await entity.async_alarm_arm_away()
+
+    mock_local_client.async_set_area_modes.assert_awaited_once_with(
+        {0: AreaMode.TOTAL, 1: AreaMode.TOTAL}, require_ready=set()
+    )
+    assert entity.alarm_state == AlarmControlPanelState.ARMED_AWAY
+
+
+async def test_panel_disarm_sends_all_members(hass: HomeAssistant, mock_local_client) -> None:
+    """Disarming the panel sets every member to disarmed."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.TOTAL, 1: AreaMode.TOTAL}
+    )
+    panel = PanelDef(id="p1", kind=PanelKind.AREAS, name="House", areas=(0, 1))
+    entity = InimPanelAlarmControl(coordinator, panel)
+    entity.hass = hass
+    entity.entity_id = "alarm_control_panel.house"
+
+    await entity.async_alarm_disarm()
+
+    mock_local_client.async_set_area_modes.assert_awaited_once_with(
+        {0: AreaMode.DISARMED, 1: AreaMode.DISARMED}, require_ready=set()
+    )
+    assert entity.alarm_state == AlarmControlPanelState.DISARMED
+
+
+async def test_scenario_panel_features_and_arm(hass: HomeAssistant, mock_local_client) -> None:
+    """A scenarios panel offers a single arm action, applying the arm scenario."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.DISARMED, 1: AreaMode.DISARMED}, scenes=_PAIR_SCENES
+    )
+    panel = PanelDef(
+        id="p1", kind=PanelKind.SCENARIOS, name="All", arm_scenario=2, disarm_scenario=8
+    )
+    entity = InimPanelAlarmControl(coordinator, panel)
+    entity.hass = hass
+    entity.entity_id = "alarm_control_panel.all"
+    assert entity.supported_features == AlarmControlPanelEntityFeature.ARM_AWAY
+
+    await entity.async_alarm_arm_away()
+
+    mock_local_client.async_set_area_modes.assert_awaited_once_with(
+        {0: AreaMode.TOTAL, 1: AreaMode.TOTAL}, require_ready=set()
+    )
+
+
+async def test_scenario_panel_arm_raises_when_scenario_gone(
+    hass: HomeAssistant, mock_local_client
+) -> None:
+    """A panel whose arm scenario no longer exists refuses and sends nothing."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.DISARMED}, scenes=_PAIR_SCENES
+    )
+    panel = PanelDef(
+        id="p1", kind=PanelKind.SCENARIOS, name="All", arm_scenario=99, disarm_scenario=8
+    )
+    entity = InimPanelAlarmControl(coordinator, panel)
+    entity.hass = hass
+    entity.entity_id = "alarm_control_panel.all"
+
+    with pytest.raises(HomeAssistantError):
+        await entity.async_alarm_arm_away()
+    mock_local_client.async_set_area_modes.assert_not_awaited()
+
+
+async def test_panel_require_code(hass: HomeAssistant, mock_local_client) -> None:
+    """With require-code on, a panel verifies the code before arming."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.DISARMED, 1: AreaMode.DISARMED}, require_code=True
+    )
+    panel = PanelDef(id="p1", kind=PanelKind.AREAS, name="House", areas=(0, 1))
+    entity = InimPanelAlarmControl(coordinator, panel)
+    entity.hass = hass
+    entity.entity_id = "alarm_control_panel.house"
+    assert entity.code_arm_required is True
+    assert entity.code_format is CodeFormat.NUMBER
+
+    mock_local_client.async_check_code.return_value = NativeCodeCheck(
+        valid=False, code_type=0, raw=b"\x00"
+    )
+    with pytest.raises(ServiceValidationError):
+        await entity.async_alarm_arm_away("000000")
+    mock_local_client.async_set_area_modes.assert_not_awaited()
+
+    mock_local_client.async_check_code.return_value = NativeCodeCheck(
+        valid=True, code_type=1, raw=b"\x01"
+    )
+    await entity.async_alarm_arm_away("123456")
+    mock_local_client.async_set_area_modes.assert_awaited_once()
+
+
+async def test_panel_arm_home_and_night(hass: HomeAssistant, mock_local_client) -> None:
+    """The areas panel's home and night modes set partial and snapshot."""
+    coordinator = _panel_coordinator(
+        hass, mock_local_client, {0: AreaMode.DISARMED, 1: AreaMode.DISARMED}
+    )
+    panel = PanelDef(id="p1", kind=PanelKind.AREAS, name="House", areas=(0, 1))
+    entity = InimPanelAlarmControl(coordinator, panel)
+    entity.hass = hass
+    entity.entity_id = "alarm_control_panel.house"
+
+    await entity.async_alarm_arm_home()
+    mock_local_client.async_set_area_modes.assert_awaited_with(
+        {0: AreaMode.PARTIAL, 1: AreaMode.PARTIAL}, require_ready=set()
+    )
+    await entity.async_alarm_arm_night()
+    mock_local_client.async_set_area_modes.assert_awaited_with(
+        {0: AreaMode.SNAPSHOT, 1: AreaMode.SNAPSHOT}, require_ready=set()
+    )

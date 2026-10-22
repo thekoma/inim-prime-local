@@ -50,7 +50,14 @@
     "step": {
       "init": {
         "title": "Opzioni INIM Prime",
-        "description": "Scegli le aree da mostrare, come etichettare e raggruppare le zone, e abilita la modalità push per ricevere eventi realtime dalla centrale tramite webhook locale. L'URL del webhook viene mostrato in una notifica dopo il salvataggio.",
+        "menu_options": {
+          "settings": "Impostazioni",
+          "panels": "Pannelli allarme (multi-area)"
+        }
+      },
+      "settings": {
+        "title": "Impostazioni",
+        "description": "Scegli le aree da mostrare, come etichettare e raggruppare le zone, abilita il push e se richiedere un codice utente.",
         "data": {
           "areas": "Aree da mostrare",
           "webhook_enabled": "Abilita push realtime (webhook locale)",
@@ -64,7 +71,50 @@
           "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant.",
           "require_code": "Se attivo, Home Assistant chiede un codice utente INIM e la centrale lo verifica prima di ogni inserimento o disinserimento. Il codice non viene mai salvato. Di default la centrale accetta qualsiasi comando sulla LAN una volta nota la password di protocollo, quindi questo aggiunge un controllo per utente lato Home Assistant. Con l'opzione attiva i pulsanti scenario (un tocco) sono disabilitati, perché un pulsante non può chiedere un codice: usa i pannelli allarme delle aree, che mostrano un tastierino."
         }
+      },
+      "panels": {
+        "title": "Pannelli allarme",
+        "description": "I pannelli sono controlli allarme in più che inseriscono o disinseriscono più aree insieme. Scegli come crearne uno.",
+        "menu_options": {
+          "panel_add_inverse": "Crea da una coppia di scenari rilevata",
+          "panel_add_areas": "Crea da un insieme di aree",
+          "panel_add_scenarios": "Crea da due scenari",
+          "panel_remove": "Rimuovi un pannello"
+        }
+      },
+      "panel_add_areas": {
+        "title": "Pannello da aree",
+        "description": "Il pannello inserisce o disinserisce queste aree insieme, con totale, parziale e notte.",
+        "data": {
+          "name": "Nome",
+          "areas": "Aree"
+        }
+      },
+      "panel_add_scenarios": {
+        "title": "Pannello da due scenari",
+        "description": "L'inserimento applica lo scenario di inserimento; il disinserimento quello di disinserimento.",
+        "data": {
+          "name": "Nome",
+          "arm_scenario": "Scenario di inserimento",
+          "disarm_scenario": "Scenario di disinserimento"
+        }
+      },
+      "panel_add_inverse": {
+        "title": "Pannelli da coppie rilevate",
+        "description": "Queste coppie di scenari inseriscono e disinseriscono esattamente le stesse aree. Scegli quali trasformare in pannelli; ognuno prende il nome dello scenario di inserimento e si può rinominare o rimuovere dopo.",
+        "data": {
+          "pairs": "Coppie di scenari"
+        }
+      },
+      "panel_remove": {
+        "title": "Rimuovi pannelli",
+        "data": {
+          "remove": "Pannelli da rimuovere"
+        }
       }
+    },
+    "abort": {
+      "no_areas": "Non ci sono ancora aree disponibili su questa centrale."
     }
   },
   "entity": {
@@ -203,6 +253,9 @@
     },
     "scenario_not_supported": {
       "message": "Questo scenario non può essere applicato: non ha una sola modalità per area, oppure la centrale ha aree oltre quelle coperte dalla definizione di uno scenario."
+    },
+    "panel_not_supported": {
+      "message": "Questo pannello non può eseguire quel comando ora (uno scenario collegato non esiste più, o non ha aree): {panel}."
     }
   },
   "selector": {

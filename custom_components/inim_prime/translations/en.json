@@ -50,7 +50,14 @@
     "step": {
       "init": {
         "title": "INIM Prime options",
-        "description": "Choose the areas to show, how zones are labelled and grouped, and enable push mode to receive realtime local webhook events from the panel. The webhook URL is shown in a notification after saving.",
+        "menu_options": {
+          "settings": "Settings",
+          "panels": "Alarm panels (multi-area)"
+        }
+      },
+      "settings": {
+        "title": "Settings",
+        "description": "Choose the areas to show, how zones are labelled and grouped, enable push mode, and whether a user code is required.",
         "data": {
           "areas": "Areas to show",
           "webhook_enabled": "Enable realtime push (local webhook)",
@@ -64,7 +71,50 @@
           "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area.",
           "require_code": "When on, Home Assistant asks for an INIM user code and the panel validates it before each arm or disarm. The code is never stored. By default the panel accepts any command over the LAN once the protocol password is known, so this adds a per-user check on Home Assistant's side. The one-tap scenario buttons are disabled while this is on, because a button cannot prompt for a code — use the area alarm panels, which show a keypad."
         }
+      },
+      "panels": {
+        "title": "Alarm panels",
+        "description": "Panels are extra alarm controls that arm or disarm several areas at once. Choose how to create one.",
+        "menu_options": {
+          "panel_add_inverse": "Create from a detected scenario pair",
+          "panel_add_areas": "Create from a set of areas",
+          "panel_add_scenarios": "Create from two scenarios",
+          "panel_remove": "Remove a panel"
+        }
+      },
+      "panel_add_areas": {
+        "title": "Panel from areas",
+        "description": "The panel arms or disarms these areas together, offering away, home and night.",
+        "data": {
+          "name": "Name",
+          "areas": "Areas"
+        }
+      },
+      "panel_add_scenarios": {
+        "title": "Panel from two scenarios",
+        "description": "Arming applies the arm scenario; disarming applies the disarm scenario.",
+        "data": {
+          "name": "Name",
+          "arm_scenario": "Arm scenario",
+          "disarm_scenario": "Disarm scenario"
+        }
+      },
+      "panel_add_inverse": {
+        "title": "Panels from detected pairs",
+        "description": "These scenario pairs arm and disarm exactly the same areas. Pick the ones to turn into panels; each takes the name of its arm scenario and can be renamed or removed later.",
+        "data": {
+          "pairs": "Scenario pairs"
+        }
+      },
+      "panel_remove": {
+        "title": "Remove panels",
+        "data": {
+          "remove": "Panels to remove"
+        }
       }
+    },
+    "abort": {
+      "no_areas": "No areas are available on this panel yet."
     }
   },
   "entity": {
@@ -203,6 +253,9 @@
     },
     "scenario_not_supported": {
       "message": "This scenario cannot be applied: it has no single target mode per area, or the panel has areas beyond the ones a scenario definition covers."
+    },
+    "panel_not_supported": {
+      "message": "This panel cannot run that command right now (a referenced scenario is gone, or it has no areas): {panel}."
     }
   },
   "selector": {

@@ -29,6 +29,14 @@ _AREA_ENTITIES = {
 }
 
 
+async def _open_area_settings(hass: HomeAssistant, entry: MockConfigEntry) -> dict:
+    """Open the options menu and step into the settings form (areas live there)."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
+
+
 # Three named areas (ids 0, 1, 4) and one factory-default one (id 5).
 _AREAS = [
     NativeObject(0, "Day"),
@@ -204,7 +212,7 @@ async def test_default_keeps_a_factory_named_area_enabled_by_hand(
         assert registry.entities[entity_id].disabled_by is None
     assert hass.states.get(alarm) is not None
     # And the options form preselects it with the named areas.
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_area_settings(hass, entry)
     key = next(k for k in result["data_schema"].schema if k == CONF_AREAS)
     assert key.default() == ["0", "1", "4", "5"]
 
@@ -263,7 +271,7 @@ async def test_options_flow_offers_areas_and_saves_the_selection(
     entry = _entry(entry_data)
     await _setup(hass, entry)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_area_settings(hass, entry)
     assert result["type"] is FlowResultType.FORM
     key = next(k for k in result["data_schema"].schema if k == CONF_AREAS)
     assert key.default() == ["0", "1", "4"]
@@ -296,6 +304,6 @@ async def test_options_flow_without_a_loaded_entry_has_no_area_field(
     entry = _entry(entry_data)
     entry.add_to_hass(hass)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_area_settings(hass, entry)
     assert result["type"] is FlowResultType.FORM
     assert CONF_AREAS not in result["data_schema"].schema

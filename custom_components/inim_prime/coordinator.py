@@ -34,12 +34,14 @@ from .client import (
     PanelStatus,
     Power,
     Scenario,
+    SceneDef,
     Version,
     Zone,
     ZoneState,
     scene_is_active,
 )
 from .const import (
+    CONF_PANELS,
     CONF_REQUIRE_CODE,
     DEFAULT_CYCLE_TIMEOUT,
     DEFAULT_REQUIRE_CODE,
@@ -61,6 +63,7 @@ from .const import (
     NATIVE_POLL_INTERVAL,
     SLOW_POLL_INTERVAL,
 )
+from .panels import PanelDef, load_panels
 
 
 @dataclass
@@ -155,6 +158,16 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
         entities can read it once at construction.
         """
         return bool(self.config_entry.options.get(CONF_REQUIRE_CODE, DEFAULT_REQUIRE_CODE))
+
+    @property
+    def panels(self) -> list[PanelDef]:
+        """The configured multi-area panels (from the entry options)."""
+        return load_panels(self.config_entry.options.get(CONF_PANELS))
+
+    @property
+    def scenes_by_id(self) -> dict[int, SceneDef]:
+        """The panel's scenario definitions keyed by id (for panel membership)."""
+        return {scene.id: scene for scene in self.local_config.scenes}
 
     async def _async_update_data(self) -> InimData:
         """Read the live panel state, tolerating a transient failure.

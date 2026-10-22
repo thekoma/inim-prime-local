@@ -12,11 +12,22 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.inim_prime.client import Local6004Config, Local6004Error
+from custom_components.inim_prime.client import (
+    AreaMode,
+    Local6004Config,
+    Local6004Error,
+    Local6004Structure,
+    NativeAreaStatus,
+    NativeGsmStatus,
+    NativeObject,
+    NativePowerValues,
+    SceneDef,
+)
 from custom_components.inim_prime.const import (
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
+    CONF_PANELS,
     CONF_REQUIRE_CODE,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
@@ -223,6 +234,15 @@ async def _setup_entry(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     await hass.async_block_till_done()
 
 
+async def _open_settings(hass: HomeAssistant, entry) -> dict:  # noqa: ANN001
+    """Open the options menu and pick the settings step, returning its form."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
+
+
 async def test_options_form_has_no_polling_fields(
     hass: HomeAssistant, patch_client: AsyncMock
 ) -> None:
@@ -230,7 +250,7 @@ async def test_options_form_has_no_polling_fields(
     entry = _add_entry(hass)
     await _setup_entry(hass, entry)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_settings(hass, entry)
 
     assert result["type"] is FlowResultType.FORM
     assert set(result["data_schema"].schema) == {
@@ -250,7 +270,7 @@ async def test_options_require_code_saved(
     await _setup_entry(hass, entry)
     assert entry.options.get(CONF_REQUIRE_CODE, False) is False
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_settings(hass, entry)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -273,7 +293,7 @@ async def test_options_enable_push_generates_a_stable_webhook(
     entry = _add_entry(hass)
     await _setup_entry(hass, entry)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_settings(hass, entry)
     with patch("custom_components.inim_prime.config_flow.async_create_notification") as notify:
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
@@ -289,7 +309,7 @@ async def test_options_enable_push_generates_a_stable_webhook(
     assert webhook_id in notify.call_args.args[1]
 
     # Saving again keeps the same secret.
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_settings(hass, entry)
     await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_WEBHOOK_ENABLED: True}
     )
@@ -307,7 +327,7 @@ async def test_options_disable_push_drops_the_webhook_id(
     )
     await _setup_entry(hass, entry)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_settings(hass, entry)
     await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_WEBHOOK_ENABLED: False}
     )
@@ -323,6 +343,212 @@ async def test_options_without_a_loaded_entry_offer_no_areas(
     """The area list comes from the running coordinator: none while not loaded."""
     entry = _add_entry(hass)
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _open_settings(hass, entry)
 
     assert "areas" not in result["data_schema"].schema
+
+
+# --------------------------------------------------------------------- panels
+_PANEL_CONFIG = Local6004Config(
+    firmware="4.07 PX500",
+    layout_ok=True,
+    scenes=[
+        SceneDef(id=2, arms={0: "away", 1: "away"}),
+        SceneDef(id=8, arms={0: "disarm", 1: "disarm"}),
+    ],
+    zone_areas={},
+    structure=Local6004Structure(
+        areas=[NativeObject(0, "Day"), NativeObject(1, "Night")],
+        zones=[],
+        scenarios=[NativeObject(2, "Arm all"), NativeObject(8, "Disarm all")],
+        outputs=[],
+    ),
+)
+
+
+@pytest.fixture
+def patch_panel_client(make_system_status):  # noqa: ANN001, ANN201
+    """Patch the client with two areas and an inverse scenario pair."""
+    client = AsyncMock()
+    client.async_read_config.return_value = _PANEL_CONFIG
+    client.async_get_area_statuses.return_value = {
+        0: NativeAreaStatus(mode=AreaMode.DISARMED, alarm=False, alarm_memory=False),
+        1: NativeAreaStatus(mode=AreaMode.DISARMED, alarm=False, alarm_memory=False),
+    }
+    client.async_get_zone_statuses.return_value = {}
+    client.async_get_output_states.return_value = {}
+    client.async_get_system_status.return_value = make_system_status()
+    client.async_get_power_values.return_value = NativePowerValues(
+        battery_temperature=27, battery_resistance=115
+    )
+    client.async_get_gsm_status.return_value = NativeGsmStatus(
+        result=0, faults={}, networks=("4G",), signal=67, operator_code="00101"
+    )
+    client.supports_native_writes = True
+    with (
+        patch("custom_components.inim_prime.Local6004Client", return_value=client),
+        patch("custom_components.inim_prime.config_flow.Local6004Client", return_value=client),
+    ):
+        yield client
+
+
+async def _open_panels(hass: HomeAssistant, entry) -> dict:  # noqa: ANN001
+    """Open the options menu and step into the panels menu."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "panels"}
+    )
+
+
+async def _pick(hass: HomeAssistant, result: dict, step: str) -> dict:
+    """Pick a menu step from a menu result."""
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": step}
+    )
+
+
+async def test_panels_menu_lists_the_available_actions(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """With an inverse pair and scenarios present, the menu offers every add action."""
+    entry = _add_entry(hass)
+    await _setup_entry(hass, entry)
+
+    result = await _open_panels(hass, entry)
+
+    assert result["type"] is FlowResultType.MENU
+    assert set(result["menu_options"]) == {
+        "panel_add_inverse",
+        "panel_add_areas",
+        "panel_add_scenarios",
+    }
+
+
+async def test_panel_add_areas_creates_a_panel(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """Adding an areas panel stores a name-agnostic definition."""
+    entry = _add_entry(hass)
+    await _setup_entry(hass, entry)
+
+    result = await _pick(hass, await _open_panels(hass, entry), "panel_add_areas")
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"name": "House", "areas": ["0", "1"]}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    panels = entry.options[CONF_PANELS]
+    assert len(panels) == 1
+    assert panels[0]["kind"] == "areas"
+    assert panels[0]["name"] == "House"
+    assert panels[0]["areas"] == [0, 1]
+
+
+async def test_panel_add_scenarios_creates_a_panel(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """Adding a scenarios panel stores the arm/disarm scenario ids."""
+    entry = _add_entry(hass)
+    await _setup_entry(hass, entry)
+
+    result = await _pick(hass, await _open_panels(hass, entry), "panel_add_scenarios")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"name": "All", "arm_scenario": "2", "disarm_scenario": "8"},
+    )
+    await hass.async_block_till_done()
+
+    panels = entry.options[CONF_PANELS]
+    assert panels[0]["kind"] == "scenarios"
+    assert panels[0]["arm_scenario"] == 2
+    assert panels[0]["disarm_scenario"] == 8
+
+
+async def test_panel_add_inverse_creates_from_selected_pairs(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """Picking a detected pair creates a scenarios panel named after the arm scene."""
+    entry = _add_entry(hass)
+    await _setup_entry(hass, entry)
+
+    result = await _pick(hass, await _open_panels(hass, entry), "panel_add_inverse")
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"pairs": ["2:8"]}
+    )
+    await hass.async_block_till_done()
+
+    panels = entry.options[CONF_PANELS]
+    assert len(panels) == 1
+    assert panels[0]["kind"] == "scenarios"
+    assert panels[0]["name"] == "Arm all"
+    assert panels[0]["arm_scenario"] == 2
+    assert panels[0]["disarm_scenario"] == 8
+
+
+async def test_panel_remove(hass: HomeAssistant, patch_panel_client: AsyncMock) -> None:
+    """An existing panel can be removed from the menu."""
+    entry = _add_entry(
+        hass,
+    )
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            CONF_PANELS: [{"id": "keep", "kind": "areas", "name": "A", "areas": [0]},
+                          {"id": "drop", "kind": "areas", "name": "B", "areas": [1]}]
+        },
+    )
+    await _setup_entry(hass, entry)
+
+    result = await _pick(hass, await _open_panels(hass, entry), "panel_remove")
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"remove": ["drop"]}
+    )
+    await hass.async_block_till_done()
+
+    ids = [p["id"] for p in entry.options[CONF_PANELS]]
+    assert ids == ["keep"]
+
+
+async def test_panel_add_areas_aborts_without_a_loaded_entry(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """With no running coordinator there are no areas, so the step aborts."""
+    entry = _add_entry(hass)  # added but not set up
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _pick(hass, result, "panels")
+    result = await _pick(hass, result, "panel_add_areas")
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_areas"
+
+
+async def test_panel_entity_follows_the_live_area_state(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """A configured panel entity appears and tracks the member areas' live state."""
+    from homeassistant.helpers import entity_registry as er
+
+    entry = _add_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={CONF_PANELS: [{"id": "p1", "kind": "areas", "name": "House", "areas": [0, 1]}]},
+    )
+    await _setup_entry(hass, entry)
+
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "alarm_control_panel", DOMAIN, f"{entry.entry_id}_panel_p1"
+    )
+    assert entity_id is not None
+    assert hass.states.get(entity_id).state == "disarmed"
+
+    statuses = patch_panel_client.async_get_area_statuses.return_value
+    statuses[0] = NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=False)
+    statuses[1] = NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=False)
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "armed_away"

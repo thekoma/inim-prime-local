@@ -77,6 +77,7 @@ _EXPECTED_EXCEPTION_KEYS = {
     "invalid_code",
     "code_check_failed",
     "command_failed",
+    "panel_not_supported",
     "scenario_not_supported",
     "forced_arm_bad_target",
     "forced_arm_single_target",
@@ -114,7 +115,10 @@ def test_config_translations_are_native_only(name: str) -> None:
     assert set(steps["user"]["data"]) == {"name", "host", "local_6004_password"}
     assert set(steps["reconfigure"]["data"]) == {"name", "host", "local_6004_password"}
     assert set(steps["reauth_confirm"]["data"]) == {"local_6004_password"}
-    assert set(_load(name)["options"]["step"]["init"]["data"]) == {
+    # Options start as a menu (settings / panels); the settings form holds the
+    # per-entry options.
+    assert set(_load(name)["options"]["step"]["init"]["menu_options"]) == {"settings", "panels"}
+    assert set(_load(name)["options"]["step"]["settings"]["data"]) == {
         "areas",
         "webhook_enabled",
         "label_language",
