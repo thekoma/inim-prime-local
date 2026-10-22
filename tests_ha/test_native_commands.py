@@ -19,11 +19,13 @@ from custom_components.inim_prime.client import (
     ArmMode,
     InimConnectionError,
     Local6004Config,
+    Local6004Error,
     NativeCommandInvalid,
     NativeCommandNotSent,
     NativeCommandRejected,
     NativeCommandUncertain,
     NativeZonesNotReady,
+    NativeZoneStatus,
     SceneDef,
     ZoneState,
     local6004,
@@ -597,3 +599,57 @@ async def test_hung_liveness_read_falls_back_to_the_cgi_once(
     # Only read-only status reads went out: the first read and the probe.
     assert len(stalled_writer.sent) == 2
     assert len(opened) == 2
+
+
+# ------------------------------------------------- native bypass read-back
+def _zone_status(excluded: bool) -> dict[int, NativeZoneStatus]:
+    return {1: NativeZoneStatus(state=ZoneState.READY, excluded=excluded, alarm_memory=False)}
+
+
+@pytest.mark.parametrize(
+    "reads",
+    [
+        [_zone_status(True)],  # applied at once
+        [_zone_status(False), _zone_status(True)],  # shows up on the next read
+        [{}],  # zone not reported: nothing to tell
+        [Local6004Error("down")],  # read failed: nothing to tell
+    ],
+)
+async def test_native_bypass_read_back_accepts(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    monkeypatch: pytest.MonkeyPatch,
+    reads: list,
+) -> None:
+    monkeypatch.setattr(commands, "_BYPASS_CHECK_DELAY", 0)
+    coordinator, native = await _coordinator(
+        hass, mock_config_entry, mock_client, mock_local_config, poll=False
+    )
+    native.async_get_zone_statuses.side_effect = reads
+    await commands.async_set_zone_excluded(coordinator, 1, True)
+    native.async_set_zone_bypass.assert_awaited_once_with(1, True)
+    mock_client.set_zone_excluded.assert_not_awaited()
+
+
+async def test_native_bypass_never_applied_is_reported(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The panel acknowledged but the zone never shows bypassed: a clear error."""
+    monkeypatch.setattr(commands, "_BYPASS_CHECK_DELAY", 0)
+    coordinator, native = await _coordinator(
+        hass, mock_config_entry, mock_client, mock_local_config
+    )
+    native.async_get_zone_statuses.return_value = _zone_status(False)
+    with pytest.raises(HomeAssistantError) as err:
+        await commands.async_set_zone_excluded(coordinator, 1, True)
+    assert err.value.translation_key == "bypass_not_applied"
+    assert err.value.translation_placeholders == {"zone": "Front Door"}
+    assert native.async_get_zone_statuses.await_count >= commands._BYPASS_CHECKS
+    # Never retried on the cgi.
+    mock_client.set_zone_excluded.assert_not_awaited()

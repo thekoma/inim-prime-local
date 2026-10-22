@@ -60,9 +60,12 @@ _EXPECTED_SENSOR_KEYS = {
     "api_connections",
     "api_last_ip",
 }
-_EXPECTED_BINARY_SENSOR_KEYS = {"system_fault", *FAULT_FLAG_KEYS}
+# "shutter": a roller-shutter zone keeps its label as name, but takes the
+# shutter icons through this translation key (no shutter binary-sensor class).
+_EXPECTED_BINARY_SENSOR_KEYS = {"system_fault", "shutter", *FAULT_FLAG_KEYS}
 _EXPECTED_EXCEPTION_KEYS = {
     "output_code_not_allowed",
+    "bypass_not_applied",
     "zones_not_ready",
     "command_failed",
     "invalid_scenario",

@@ -29,6 +29,7 @@ so the callers keep translating them as before.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 
 from homeassistant.exceptions import HomeAssistantError
@@ -38,6 +39,7 @@ from .client import (
     AreaMode,
     ArmMode,
     Local6004Client,
+    Local6004Error,
     NativeCommandError,
     NativeCommandNotSent,
     NativeZonesNotReady,
@@ -54,6 +56,10 @@ _ARM_TO_AREA_MODE: dict[ArmMode, AreaMode] = {
 }
 
 type _Native = Callable[[Local6004Client], Awaitable[None]]
+
+# A native bypass is read back this many times, this far apart (seconds).
+_BYPASS_CHECKS = 4
+_BYPASS_CHECK_DELAY = 0.5
 
 
 async def _async_run(
@@ -186,10 +192,23 @@ async def async_clear_alarm_memory(coordinator: InimDataUpdateCoordinator, area_
 async def async_set_zone_excluded(
     coordinator: InimDataUpdateCoordinator, zone_id: int, excluded: bool
 ) -> None:
-    """Bypass (exclude) or un-bypass one zone."""
+    """Bypass (exclude) or un-bypass one zone.
+
+    Natively, the zone is then read back live: the panel acknowledges a bypass
+    it does not apply, so a change that never shows up is reported instead of
+    the switch silently flipping back.
+    """
 
     async def _native(client: Local6004Client) -> None:
         await client.async_set_zone_bypass(zone_id, excluded)
+        if not await _bypass_applied(client, zone_id, excluded):
+            await coordinator.async_native_poll()
+            label = next((z.label for z in coordinator.data.zones if z.id == zone_id), zone_id)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="bypass_not_applied",
+                translation_placeholders={"zone": str(label)},
+            )
 
     async def _cgi() -> object:
         return await coordinator.client.set_zone_excluded(zone_id, excluded)
@@ -210,3 +229,21 @@ async def async_set_output(
         return await coordinator.client.set_output(output_id, value)
 
     await _async_run(coordinator, f"output {output_id} -> {value}", _native, _cgi)
+
+
+async def _bypass_applied(client: Local6004Client, zone_id: int, excluded: bool) -> bool:
+    """Return False only if the zone's live status never shows ``excluded``.
+
+    A status that cannot be read says nothing either way: the regular poll then
+    shows the truth.
+    """
+    for attempt in range(_BYPASS_CHECKS):
+        if attempt:
+            await asyncio.sleep(_BYPASS_CHECK_DELAY)
+        try:
+            status = (await client.async_get_zone_statuses({zone_id})).get(zone_id)
+        except Local6004Error:
+            return True
+        if status is None or status.excluded is excluded:
+            return True
+    return False
