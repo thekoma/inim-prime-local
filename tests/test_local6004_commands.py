@@ -55,11 +55,32 @@ def _ack(op: int) -> bytes:
         (m._write_cmd(8, m.output_data(1007, True)), "08000000740000000000ef030100"),
         (m._write_cmd(8, m.output_data(1005, False)), "08000000740000000000ed030000"),
         (m._write_cmd(9, m.zone_bypass_data(12, True)), "090000007400000000000c000000"),
-        (m._write_cmd(9, m.zone_bypass_data(1017, False)), "09000000740000000000f9030200"),
+        (m._write_cmd(9, m.zone_bypass_data(12, False)), "090000007400000000000c000200"),
     ],
 )
 def test_write_bodies_match_pitscheider(body: bytes, expected: str) -> None:
     assert body.hex() == expected
+
+
+@pytest.mark.parametrize(
+    ("zone_id", "excluded", "half_offset", "expected"),
+    [
+        # Captured from Prime/STUDIO on a 5.00 panel: zone 16 + 1505 is sent
+        # as terminal 16, 1 to bypass and 3 to un-bypass.
+        (1521, True, 1505, "10000100"),
+        (1521, False, 1505, "10000300"),
+        (16, True, 1505, "10000000"),
+        (16, False, 1505, "10000200"),
+        # The same rule on the 4.x layout (second half at 1005).
+        (1017, True, 1005, "0c000100"),
+        (1017, False, 1005, "0c000300"),
+        (2500, True, 1505, "e3030100"),
+    ],
+)
+def test_bypass_addresses_the_terminal_and_its_half(
+    zone_id: int, excluded: bool, half_offset: int, expected: str
+) -> None:
+    assert m.zone_bypass_data(zone_id, excluded, half_offset).hex() == expected
 
 
 def test_encode_pin() -> None:
@@ -82,6 +103,7 @@ def test_encode_pin() -> None:
         lambda: m.reset_data([]),
         lambda: m.reset_data([30]),
         lambda: m.zone_bypass_data(2010, True),
+        lambda: m.zone_bypass_data(3010, True, 1505),
         lambda: m.zone_bypass_data(-1, True),
         lambda: m.output_data(1004, True),
         lambda: m.output_data(1010, True),
@@ -205,7 +227,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, opener: _Opener) -> None:
             3,
             bytes(4) + b"\x01\x04" + bytes(24),
         ),
-        (lambda c: c.async_set_zone_bypass(1017, True), 9, bytes.fromhex("f9030000")),
+        (lambda c: c.async_set_zone_bypass(1017, True), 9, bytes.fromhex("0c000100")),
         (lambda c: c.async_set_output(1009, False), 8, bytes.fromhex("f1030000")),
         (lambda c: c.async_reset_areas({1, 3}), 16, bytes.fromhex("0a000000")),
     ],
