@@ -66,8 +66,8 @@ def test_layout_addresses_match_dll(major: str) -> None:
     for name in _ADDR_FIELDS:
         coded = getattr(layout, name)
         if coded is None:
-            # e.g. 5.x log_addr: the DLL has a candidate, but it is deliberately
-            # left unmapped until the 5.x log decode is verified on live hardware.
+            # a table the DLL attests but the code deliberately leaves unmapped
+            # until it is verified on live hardware.
             continue
         assert name in fields, f"{name} is mapped in code but absent from the DLL map"
         assert coded == int(fields[name]["addr"], 16), f"{major}: {name} drifted from the DLL"

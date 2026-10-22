@@ -546,7 +546,7 @@ def test_layout_50x_offsets() -> None:
     assert layout.area_labels == m._LAYOUT_40X.area_labels  # unchanged
     assert layout.zone_labels == m._LAYOUT_40X.zone_labels  # unchanged
     assert layout.zone_cfg == 0x1408B920  # recovered from Centrale5.dll, verified live
-    assert layout.log_addr is None  # event-log 5.x offset still unmapped
+    assert layout.log_addr == 0x104A8  # spring_eep_logger_ev, verified live
     assert layout.native_writes_ok is True  # 5.00 native writes verified live
 
 
@@ -625,45 +625,175 @@ def _log_record(ts: int, partmask: int, b0: int, b1: int, b3: int) -> bytes:
     return bytes(r)
 
 
+def _class_table(*entries: tuple[int, int]) -> bytes:
+    """Build an event-class table: (first code, kind) entries, then padding."""
+    out = b"".join(start.to_bytes(2, "little") + bytes([0, kind, 0]) for start, kind in entries)
+    return out + entries[-1][0].to_bytes(2, "little") + bytes(3) + bytes(10)
+
+
+# A synthetic class table: class i starts at code 10 * i, with kind 1 (zone) for
+# class 0, 2 (area) for class 2, 4 (key) for class 22, 13 (scenario) for class
+# 30, an unknown kind for class 197, a one-code zone class at 1980, and the end
+# sentinel at 2000.
+_KINDS = {0: 1, 2: 2, 22: 4, 30: 13, 197: 99, 198: 1}
+_CLASSES = m.decode_event_classes(
+    _class_table(
+        *[(10 * i, _KINDS.get(i, 0)) for i in range(199)], (1981, 0), (2000, 0)
+    )
+)
+
+
+def _code_record(code: int, ts: int = 0x31000000, partmask: int = 0, flags: int = 0x80) -> bytes:
+    return _log_record(ts, partmask, code & 0xFF, code >> 8, flags)
+
+
+def test_decode_event_classes_stops_at_the_sentinel() -> None:
+    assert len(_CLASSES) == 201  # 200 classes + the end sentinel
+    assert _CLASSES[30] == m.EventClass(start=300, kind=13)
+    assert [c.start for c in _CLASSES][-3:] == [1980, 1981, 2000]
+
+
+def test_logger_class_table() -> None:
+    reply = (~0x1F & 0xFFFFFFFF).to_bytes(4, "little") + (0x1A037C3C).to_bytes(4, "little")
+    assert m.logger_class_table(reply + (735).to_bytes(4, "little")) == (0x1A037C3C, 735)
+    assert m.logger_class_table(reply) is None  # too short
+    assert m.logger_class_table(reply + (733).to_bytes(4, "little")) is None  # not 5-byte entries
+    assert m.logger_class_table(reply + (0).to_bytes(4, "little")) is None
+    assert m.logger_class_table(reply + (5 * 513).to_bytes(4, "little")) is None
+    no_addr = reply[:4] + bytes(4) + (735).to_bytes(4, "little")
+    assert m.logger_class_table(no_addr) is None
+
+
 def test_decode_event_log() -> None:
     blob = (
-        _log_record(0x31000000, 0x01, 0x6E, 0x1F, 0x80)  # Valid key, part0, set
-        + _log_record(0x31000010, 0x00, 0x5E, 0x22, 0x00)  # Scenario idx 3, restoral
-        + _log_record(0x31000020, 0x04, 0xAA, 0xBB, 0x80)  # unknown code, part2
+        _code_record(3, partmask=0x01)  # class 0, zone alarm: zone 3
+        + _code_record(21, flags=0x00)  # class 2, partition alarm: area 1, restoral
+        + _code_record(225)  # class 22, valid key: key index 5
+        + _code_record(303)  # class 30, scenario 3
+        + _code_record(15)  # class 1: no object kind
+        + _code_record(1975)  # class 197: unknown object kind
+        + _code_record(1980)  # class 198: a one-code class names no object
+        + _code_record(1995)  # class 199: beyond the named types
+        + _code_record(2005, partmask=0x04)  # past the end sentinel: raw
         + _log_record(0, 0, 0, 0, 0)  # empty slot -> skipped
     )
-    events = m.decode_event_log(blob, {0: "Home"}, {3: "Dis.Box"})
-    assert len(events) == 3  # the empty slot is dropped
-    assert events[0]["event"] == "Valid key"
-    assert events[0]["partitions"] == ["Home"]
-    assert events[0]["restoral"] is False  # 0x80 = set
+    events = m.decode_event_log(
+        blob, {0: "Home", 1: "Garage"}, {3: "Dis.Box"}, _CLASSES, {3: "Front door"}
+    )
+    assert len(events) == 9  # the empty slot is dropped
+    assert events[0] == {
+        "time": events[0]["time"],
+        "event": "Zone alarm",
+        "partitions": ["Home"],
+        "restoral": False,  # 0x80 = set
+        "zone": "Front door",
+    }
+    assert (events[1]["event"], events[1]["area"], events[1]["restoral"]) == (
+        "Partition alarm",
+        "Garage",
+        True,  # flag clear
+    )
+    assert (events[2]["event"], events[2]["key"]) == ("Valid key", 6)  # 1-based number
+    assert (events[3]["event"], events[3]["scenario"]) == ("Scenario", "Dis.Box")
+    plain = ("time", "event", "partitions", "restoral")
+    for event in events[4:7]:
+        assert set(event) == set(plain)
+    assert events[4]["event"] == "Terminal tamper"
+    assert events[7]["event"] == "Event type 199"
+    # a code past the last class renders raw; unlabeled partition falls back to areaN
+    assert events[8]["event"] == "code:d507"
+    assert events[8]["partitions"] == ["area3"]
+
+
+def test_decode_event_log_without_classes_is_raw() -> None:
+    events = m.decode_event_log(_code_record(303))
+    assert events[0]["event"] == "code:2f01"
     assert "scenario" not in events[0]
-    assert events[1]["event"] == "Scenario"
-    assert events[1]["scenario"] == "Dis.Box"
-    assert events[1]["restoral"] is True  # flag clear
-    # unknown code renders raw; unlabeled partition falls back to areaN
-    assert events[2]["event"] == "code:aabb"
-    assert events[2]["partitions"] == ["area3"]
+
+
+def test_decode_event_log_unlabelled_zone_and_area() -> None:
+    events = m.decode_event_log(_code_record(3) + _code_record(21), classes=_CLASSES)
+    assert (events[0]["zone"], events[1]["area"]) == ("4", "2")  # 1-based fallbacks
+
+
+class _LogConn:
+    """A fake log session: the op 0x1F reply, then memory reads by address."""
+
+    def __init__(self, rules: bytes, memory: dict[int, bytes]) -> None:
+        self.rules = rules
+        self.memory = memory
+        self.reads: list[tuple[int, int]] = []
+
+
+def _patch_log(monkeypatch: pytest.MonkeyPatch, client: m.Local6004Client, conn: _LogConn) -> None:
+    writer = _FakeWriter()
+
+    async def fake_open(host: str, port: int):  # noqa: ANN202
+        return _FakeReader(b""), writer
+
+    async def fake_xfer(reader, writer, app, *, first):  # noqa: ANN001, ANN202
+        assert app == m._OPEN_LOG
+        return conn.rules
+
+    async def fake_read(reader, writer, addr, length):  # noqa: ANN001, ANN202
+        conn.reads.append((addr, length))
+        return conn.memory[addr][:length]
+
+    monkeypatch.setattr(m.asyncio, "open_connection", fake_open)
+    monkeypatch.setattr(client, "_xfer", fake_xfer)
+    monkeypatch.setattr(client, "_read", fake_read)
+
+
+def _rules(addr: int, length: int) -> bytes:
+    return (~0x1F & 0xFFFFFFFF).to_bytes(4, "little") + addr.to_bytes(4, "little") + (
+        length.to_bytes(4, "little") + bytes(16)
+    )
 
 
 async def test_async_read_event_log(monkeypatch: pytest.MonkeyPatch) -> None:
-    blob = _log_record(0x31000000, 0x01, 0x6E, 0x1F, 0x80)
+    table = _class_table(*[(10 * i, _KINDS.get(i, 0)) for i in range(199)], (1981, 0), (2000, 0))
+    blob = _code_record(225, partmask=0x01)
     client = m.Local6004Client("host", "pass")
+    conn = _LogConn(_rules(0x1A000000, 5 * 201), {0x1A000000: table, m._LOG_ADDR: blob})
+    _patch_log(monkeypatch, client, conn)
 
-    async def fake_session(open_payload, reads):  # noqa: ANN001, ANN202
-        assert open_payload == m._OPEN_LOG
-        assert reads == [(m._LOG_ADDR, m._LOG_LEN)]
-        return [blob]
-
-    monkeypatch.setattr(client, "_session", fake_session)
     events = await client.async_read_event_log({0: "Home"})
-    assert events[0]["event"] == "Valid key"
+
+    assert conn.reads == [(0x1A000000, 5 * 201), (m._LOG_ADDR, m._LOG_LEN)]
+    assert (events[0]["event"], events[0]["key"], events[0]["partitions"]) == (
+        "Valid key",
+        6,
+        ["Home"],
+    )
 
 
-async def test_event_log_unavailable_on_50x_layout() -> None:
-    """A layout with no mapped event-log offset (5.x) errors instead of reading garbage."""
+async def test_async_read_event_log_without_a_class_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unusable op 0x1F reply still returns the events, with raw codes."""
+    client = m.Local6004Client("host", "pass")
+    conn = _LogConn(b"\xe0\xff\xff\xff", {m._LOG_ADDR: _code_record(225)})
+    _patch_log(monkeypatch, client, conn)
+
+    events = await client.async_read_event_log()
+
+    assert conn.reads == [(m._LOG_ADDR, m._LOG_LEN)]
+    assert events[0]["event"] == "code:e100"
+
+
+async def test_event_log_reads_the_50x_offset(monkeypatch: pytest.MonkeyPatch) -> None:
     client = m.Local6004Client("host", "pass")
     client._layout = m._LAYOUT_50X
+    conn = _LogConn(b"", {0x104A8: b""})
+    _patch_log(monkeypatch, client, conn)
+    assert await client.async_read_event_log() == []
+    assert conn.reads == [(0x104A8, m._LOG_LEN)]
+
+
+async def test_event_log_unavailable_without_a_log_offset() -> None:
+    """A layout with no mapped event-log offset errors instead of reading garbage."""
+    client = m.Local6004Client("host", "pass")
+    client._layout = replace(m._LAYOUT_50X, log_addr=None)
     with pytest.raises(m.Local6004Error, match="event log offset not mapped"):
         await client.async_read_event_log()
 
@@ -671,10 +801,10 @@ async def test_event_log_unavailable_on_50x_layout() -> None:
 async def test_async_read_event_log_error(monkeypatch: pytest.MonkeyPatch) -> None:
     client = m.Local6004Client("host", "pass")
 
-    async def boom(open_payload, reads):  # noqa: ANN001, ANN202
+    async def boom(host: str, port: int):  # noqa: ANN202
         raise OSError("down")
 
-    monkeypatch.setattr(client, "_session", boom)
+    monkeypatch.setattr(m.asyncio, "open_connection", boom)
     with pytest.raises(m.Local6004Error):
         await client.async_read_event_log()
 
