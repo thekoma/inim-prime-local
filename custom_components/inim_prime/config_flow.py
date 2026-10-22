@@ -191,6 +191,9 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
     user via a persistent notification so they can paste it into PrimeStudio.
     """
 
+    # The panel being edited, carried from the "edit" picker to its form.
+    _edit_id: str = ""
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show the options menu: the settings form, or panel management."""
         return self.async_show_menu(step_id="init", menu_options=["settings", "panels"])
@@ -311,6 +314,7 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
         if _scenarios(self.config_entry):
             menu.append("panel_add_scenarios")
         if self._current_panels():
+            menu.append("panel_edit")
             menu.append("panel_remove")
         return self.async_show_menu(step_id="panels", menu_options=menu)
 
@@ -436,6 +440,90 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                 }
             ),
         )
+
+    async def async_step_panel_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick an existing panel to edit; its form follows.
+
+        Only reachable from the panels menu, which lists this action only while
+        panels exist, so the list below is never empty.
+        """
+        panels = self._current_panels()
+        if user_input is not None:
+            self._edit_id = user_input["panel"]
+            return await self.async_step_panel_edit_form()
+        return self.async_show_form(
+            step_id="panel_edit",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("panel"): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(value=p.id, label=p.name) for p in panels
+                            ],
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_panel_edit_form(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Rename a panel and change its areas or scenarios (its id is kept)."""
+        panels = self._current_panels()
+        panel = {p.id: p for p in panels}[self._edit_id]
+        if user_input is not None:
+            if panel.kind is PanelKind.AREAS:
+                updated = PanelDef(
+                    id=panel.id,
+                    kind=PanelKind.AREAS,
+                    name=user_input["name"],
+                    areas=tuple(int(a) for a in user_input["areas"]),
+                )
+            else:
+                updated = PanelDef(
+                    id=panel.id,
+                    kind=PanelKind.SCENARIOS,
+                    name=user_input["name"],
+                    arm_scenario=int(user_input["arm_scenario"]),
+                    disarm_scenario=int(user_input["disarm_scenario"]),
+                )
+            return self._save_panels([updated if p.id == panel.id else p for p in panels])
+
+        schema: dict[vol.Marker, Any] = {vol.Required("name", default=panel.name): str}
+        if panel.kind is PanelKind.AREAS:
+            areas = _panel_areas(self.config_entry)
+            offered = {str(area.id) for area in areas}
+            schema[
+                vol.Required("areas", default=[str(a) for a in panel.areas if str(a) in offered])
+            ] = SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(
+                            value=str(area.id),
+                            label=" ".join(area.label.split()) or str(area.id + 1),
+                        )
+                        for area in areas
+                    ],
+                    multiple=True,
+                    mode=SelectSelectorMode.LIST,
+                )
+            )
+        else:
+            choices = [
+                SelectOptionDict(value=str(s.id), label=" ".join(s.label.split()) or str(s.id))
+                for s in _scenarios(self.config_entry)
+            ]
+            selector = SelectSelector(
+                SelectSelectorConfig(options=choices, mode=SelectSelectorMode.DROPDOWN)
+            )
+            schema[vol.Required("arm_scenario", default=str(panel.arm_scenario))] = selector
+            schema[vol.Required("disarm_scenario", default=str(panel.disarm_scenario))] = selector
+
+        return self.async_show_form(step_id="panel_edit_form", data_schema=vol.Schema(schema))
 
     async def async_step_panel_remove(
         self, user_input: dict[str, Any] | None = None

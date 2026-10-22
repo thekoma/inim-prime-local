@@ -79,7 +79,8 @@
           "panel_add_inverse": "Create from a detected scenario pair",
           "panel_add_areas": "Create from a set of areas",
           "panel_add_scenarios": "Create from two scenarios",
-          "panel_remove": "Remove a panel"
+          "panel_remove": "Remove a panel",
+          "panel_edit": "Edit a panel"
         }
       },
       "panel_add_areas": {
@@ -110,6 +111,23 @@
         "title": "Remove panels",
         "data": {
           "remove": "Panels to remove"
+        }
+      },
+      "panel_edit": {
+        "title": "Edit a panel",
+        "description": "Pick the panel to edit; its name and areas or scenarios follow.",
+        "data": {
+          "panel": "Panel"
+        }
+      },
+      "panel_edit_form": {
+        "title": "Edit panel",
+        "description": "Change the name and the areas or scenarios. The panel keeps its identity.",
+        "data": {
+          "name": "Name",
+          "areas": "Areas",
+          "arm_scenario": "Arm scenario",
+          "disarm_scenario": "Disarm scenario"
         }
       }
     },
