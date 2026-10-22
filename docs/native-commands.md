@@ -14,6 +14,7 @@ Every write (arm/disarm, scenarios, zone bypass, outputs, alarm-memory reset, fo
 | Zone bypass switch | op 9 (set zone bypass) | — |
 | Output switch | op 8 (set output) | — |
 | Clear alarm memory button | op 16 (reset partitions) | — |
+| Clear call queue button | op 0x39 (`stop_actions`), action 2 only | — |
 | `inim_prime.arm_forced`, and scenario buttons with *force arm on open zones* on | op 9 for each open zone, then op 3 | an open zone cannot be bypassed and `allow_partial` is off |
 
 A scenario is sent as one op 3 when every target maps to one mode: *away* → Total, *stay* → Partial, *disarm* → Disarmed. A scenario with any other target (e.g. an area set to both away and stay) is refused with *scenario not supported*. Scenario definitions are decoded for partitions 0–11 only, so on a panel with an area 12 or higher every scenario is refused: it could target a partition the decode cannot see, and applying it would leave that partition out.
@@ -28,7 +29,7 @@ A scenario is sent as one op 3 when every target maps to one mode: *away* → To
 
 ## Safety rules
 
-- **Explicit allow-list.** Only four write opcodes can ever be built (3, 8, 9, 16), in their own allow-list, separate from the read-only status commands (6, 7, 0x0D) and the memory reads. The checks are explicit `if … raise`, not `assert`, so `python -O` cannot remove them.
+- **Explicit allow-list.** Only five write opcodes can ever be built (3, 8, 9, 16, 0x39), in their own allow-list, separate from the read-only status commands (6, 7, 0x0D, 0x31, 0x5E) and the memory reads. Op 0x39 also stops alarms (action 1) or resets alarm memory (action 3); the integration only ever sends action 2, clear the call queue, and the action byte is a constant, not a parameter. The checks are explicit `if … raise`, not `assert`, so `python -O` cannot remove them.
 - **Sent at most once, never retried.** If the frame **certainly never left** (the connection could not be opened, or the arguments were refused before sending), Home Assistant shows *the panel command failed*. Once the frame has been handed to the socket, any failure (timeout, dropped connection, unexpected answer) means the panel **may have executed it**: nothing is retried, the state is re-read, and Home Assistant shows *"The native command may have reached the panel, but its outcome is unknown… check the panel state before trying again."*
 - **Liveness check first.** Before a write on the kept-open connection, a read-only partition-status read proves the connection alive. A dead connection is then replaced before the write, instead of the write disappearing into it.
 - **Same connection, same lock.** Writes share the persistent connection and lock of the status poll, so a write never interleaves with a status read. Each write has a 15 s ceiling; the liveness read inside it has its own 5 s ceiling, so a stalled connection is replaced with time left for the reconnect and the write.
@@ -48,6 +49,7 @@ A command is `[op:4 LE][PIN:6][data]`, AES-encrypted in the usual 6004 frame wit
 | op 9 set zone bypass | `[terminal:2 LE][0 bypass / 2 unbypass, +1 for the terminal's second zone:2 LE]` | bypass zone 12: `09000000 740000000000 0c00 0000`; on 5.00 bypass zone 1521 (terminal 16, second zone): `… 1000 0100` |
 | op 8 set output | `[terminal:2 LE][1 on / 0 off:2 LE]` | output 1007 on: `08000000 740000000000 ef03 0100` |
 | op 16 reset partitions | `[partition bitmask:4 LE]` | reset area 4: `10000000 740000000000 10000000` |
+| op 0x39 clear the call queue | `[partition bitmask:4 LE][02]` (the queue of every channel is cleared, whatever the mask) | areas 1–5: `39000000 740000000000 1f000000 02` |
 
 The unit tests pin these bodies byte for byte to the output of Pitscheider's own payload builders.
 

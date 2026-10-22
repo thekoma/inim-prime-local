@@ -14,6 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.inim_prime.button import (
     InimApplyScenarioButton,
     InimClearAlarmMemoryButton,
+    InimClearCallsButton,
     async_setup_entry,
 )
 from custom_components.inim_prime.client import (
@@ -88,7 +89,7 @@ def two_areas() -> list[Area]:
 
 
 async def test_async_setup_entry_creates_one_button_per_area(two_areas) -> None:
-    """One button entity is created per area."""
+    """One clear-memory button per area, plus the panel-wide clear-calls button."""
     coordinator = _make_coordinator(two_areas)
     entry = MagicMock()
     entry.options = {}
@@ -97,8 +98,9 @@ async def test_async_setup_entry_creates_one_button_per_area(two_areas) -> None:
     added: list = []
     await async_setup_entry(MagicMock(), entry, lambda new, *a, **k: added.extend(list(new)))
 
-    assert len(added) == 2
-    assert all(isinstance(e, InimClearAlarmMemoryButton) for e in added)
+    assert len(added) == 3
+    assert isinstance(added[0], InimClearCallsButton)
+    assert all(isinstance(e, InimClearAlarmMemoryButton) for e in added[1:])
 
 
 def test_button_properties(two_areas) -> None:
@@ -155,6 +157,19 @@ async def test_async_press_resets_the_area_then_rereads(two_areas) -> None:
     await button.async_press()
 
     coordinator.client.async_reset_areas.assert_awaited_once_with([2])
+    coordinator.async_refresh.assert_awaited_once()
+
+
+async def test_clear_calls_button(two_areas) -> None:
+    """The panel-wide button clears the call queue for every area, then re-reads."""
+    coordinator = _make_coordinator(two_areas)
+    button = InimClearCallsButton(coordinator)
+    assert button.unique_id == f"{coordinator.config_entry.entry_id}_clear_calls"
+    assert button.translation_key == "clear_calls"
+
+    await button.async_press()
+
+    coordinator.client.async_clear_calls.assert_awaited_once_with([1, 2])
     coordinator.async_refresh.assert_awaited_once()
 
 

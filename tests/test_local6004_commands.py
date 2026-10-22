@@ -134,7 +134,7 @@ def test_read_guard(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_allow_lists_are_disjoint_and_exact() -> None:
-    assert frozenset({3, 8, 9, 16}) == m._WRITE_OPS
+    assert frozenset({3, 8, 9, 16, 0x39}) == m._WRITE_OPS
     assert frozenset({6, 7, 0x0D, 0x31, 0x5E}) == m._STATUS_OPS
     assert frozenset({0x10, 0x11}) == m._READ_OPS
     # Memory-read opcodes are a byte inside a read body, a different namespace
@@ -230,6 +230,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, opener: _Opener) -> None:
         (lambda c: c.async_set_zone_bypass(1017, True), 9, bytes.fromhex("0c000100")),
         (lambda c: c.async_set_output(1009, False), 8, bytes.fromhex("f1030000")),
         (lambda c: c.async_reset_areas({1, 3}), 16, bytes.fromhex("0a000000")),
+        (lambda c: c.async_clear_calls({0, 1, 2}), 0x39, bytes.fromhex("0700000002")),
     ],
 )
 async def test_command_sends_one_exact_frame(
@@ -446,3 +447,11 @@ async def test_arm_pre_check_failure_is_not_sent(monkeypatch: pytest.MonkeyPatch
         )
     assert not isinstance(info.value, m.NativeCommandUncertain)
     assert [_decrypt(f)[:4] for f in stream[1].sent] == [b"\x07\x00\x00\x00"]
+
+
+def test_clear_calls_data_only_ever_clears_calls() -> None:
+    """The stop_actions action byte is a literal 2: never stop alarms (1) or reset memory (3)."""
+    assert m.clear_calls_data([0, 4]) == bytes.fromhex("1100000002")
+    assert m._ACTION_CLEAR_CALLS == 2
+    with pytest.raises(ValueError):
+        m.clear_calls_data([])

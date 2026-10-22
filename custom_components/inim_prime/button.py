@@ -10,7 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .areas import area_shown
 from .client import Area, Scenario
-from .commands import async_apply_scenario, async_clear_alarm_memory
+from .commands import async_apply_scenario, async_clear_alarm_memory, async_clear_calls
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
 from .forced_arm import async_force_arm
@@ -46,6 +46,7 @@ async def async_setup_entry(
             known.add(uid)
             new_entities.append(entity)
 
+        _add(InimClearCallsButton(coordinator))
         for area in coordinator.data.areas:
             if area_shown(hass, entry, area):
                 _add(InimClearAlarmMemoryButton(coordinator, area))
@@ -59,6 +60,23 @@ async def async_setup_entry(
 
     entry.async_on_unload(coordinator.async_add_listener(_sync))
     _sync()
+
+
+class InimClearCallsButton(CoordinatorEntity[InimDataUpdateCoordinator], ButtonEntity):
+    """Button that clears the panel's outgoing call queue (the keypad's "Canc. telefonate")."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "clear_calls"
+
+    def __init__(self, coordinator: InimDataUpdateCoordinator) -> None:
+        """Initialize the button."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_clear_calls"
+        self._attr_device_info = panel_device_info(coordinator)
+
+    async def async_press(self) -> None:
+        """Drop the pending calls and reports (a failure raises, see commands.py)."""
+        await async_clear_calls(self.coordinator)
 
 
 class InimClearAlarmMemoryButton(

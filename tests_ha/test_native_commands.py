@@ -89,6 +89,8 @@ async def test_commands_are_sent_natively_and_refresh(
     ]
     await commands.async_clear_alarm_memory(coordinator, 1)
     mock_local_client.async_reset_areas.assert_awaited_once_with([1])
+    await commands.async_clear_calls(coordinator)
+    mock_local_client.async_clear_calls.assert_awaited_once_with([1])
     await commands.async_set_zone_excluded(coordinator, 1, False)
     mock_local_client.async_set_zone_bypass.assert_awaited_once_with(1, False)
     await commands.async_set_output(coordinator, 1505, 1)
@@ -97,7 +99,7 @@ async def test_commands_are_sent_natively_and_refresh(
         (1505, True),
         (1506, False),
     ]
-    assert mock_local_client.async_get_area_statuses.await_count == reads + 8
+    assert mock_local_client.async_get_area_statuses.await_count == reads + 9
 
 
 @pytest.mark.parametrize(
@@ -106,6 +108,7 @@ async def test_commands_are_sent_natively_and_refresh(
         lambda c: commands.async_arm_area(c, 1, ArmMode.TOTAL),
         lambda c: commands.async_apply_scenario(c, 1),
         lambda c: commands.async_clear_alarm_memory(c, 1),
+        lambda c: commands.async_clear_calls(c),
         lambda c: commands.async_set_zone_excluded(c, 1, True),
         lambda c: commands.async_set_output(c, 1, 1),
     ],
@@ -125,6 +128,7 @@ async def test_unverified_firmware_refuses_every_command(
     for write in (
         mock_local_client.async_set_area_modes,
         mock_local_client.async_reset_areas,
+        mock_local_client.async_clear_calls,
         mock_local_client.async_set_zone_bypass,
         mock_local_client.async_set_output,
     ):
@@ -314,6 +318,7 @@ _COMMANDS = [
     (lambda c: commands.async_arm_area(c, 1, ArmMode.DISARM), "async_set_area_modes"),
     (lambda c: commands.async_apply_scenario(c, 1), "async_set_area_modes"),
     (lambda c: commands.async_clear_alarm_memory(c, 1), "async_reset_areas"),
+    (lambda c: commands.async_clear_calls(c), "async_clear_calls"),
     (lambda c: commands.async_set_zone_excluded(c, 1, True), "async_set_zone_bypass"),
     (lambda c: commands.async_set_output(c, 1, 1), "async_set_output"),
 ]

@@ -164,6 +164,16 @@ async def async_clear_alarm_memory(coordinator: InimDataUpdateCoordinator, area_
     await _async_run(coordinator, f"alarm memory reset of area {area_id}", _native)
 
 
+async def async_clear_calls(coordinator: InimDataUpdateCoordinator) -> None:
+    """Clear the panel's outgoing call queue (pending calls and reports)."""
+    area_ids = [area.id for area in coordinator.data.areas]
+
+    async def _native(client: Local6004Client) -> None:
+        await client.async_clear_calls(area_ids)
+
+    await _async_run(coordinator, "call queue clear", _native)
+
+
 async def async_set_zone_excluded(
     coordinator: InimDataUpdateCoordinator, zone_id: int, excluded: bool
 ) -> None:

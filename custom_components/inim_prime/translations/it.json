@@ -146,6 +146,11 @@
       "force_arm_on_open": {
         "name": "Inserimento forzato con zone aperte"
       }
+    },
+    "button": {
+      "clear_calls": {
+        "name": "Cancella chiamate"
+      }
     }
   },
   "exceptions": {

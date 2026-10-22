@@ -95,6 +95,11 @@
       "force_arm_on_open": {
         "default": "mdi:shield-alert-outline"
       }
+    },
+    "button": {
+      "clear_calls": {
+        "default": "mdi:phone-cancel"
+      }
     }
   },
   "services": {

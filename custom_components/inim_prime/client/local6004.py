@@ -12,7 +12,7 @@ The integration's only channel to the panel. What it reads and sends:
 * **multi-active scenes** — each arming scenario's per-partition target mode
   (``away``/``stay``/``disarm``); a scenario is "active" when every partition it
   targets currently matches that mode;
-* four **write commands** (see "Write commands" below) and the event log.
+* five **write commands** (see "Write commands" below) and the event log.
 
 Protocol (reverse-engineered + verified on a live capture; AES key = the panel
 LAN password): each frame is ``50 50 | CRC16-ARC(LE over [+4..end]) | flag(LE) |
@@ -23,14 +23,16 @@ context op-code; reads use op 0x11 (start) / 0x10 (continue) with
 ⚠️ Opcode allow-lists: this module only ever emits the two memory-read
 opcodes, the read-only *status* commands (op 6 partition statuses, op 7
 terminal statuses, op 0x0D system status, op 0x31 power values, op 0x5E GSM
-status) and the four *write* commands below. It never builds a memory-write/program frame (the same framing with another opcode — on a
+status) and the five *write* commands below. It never builds a
+memory-write/program frame (the same framing with another opcode — on a
 production panel a stray write could brick it). ``_read_cmd``,
 ``_status_cmd`` and ``_write_cmd`` each check their opcode against their own
 literal allow-list and raise :class:`OpcodeNotAllowed` otherwise
 (:class:`ReadOnlyViolation` for the read-only ones; an explicit check, not an
 ``assert``, so ``python -O`` cannot drop it).
 
-Write commands (same source, verified live on PrimeX 4.07 and 5.00): request
+Write commands (same source, verified live on PrimeX 4.07 and 5.00; op 0x39 from
+libdriver and the PrimeX firmware): request
 ``[op:4 LE][pin:6][data]``, where the PIN is one digit per byte padded with
 0xFF (``74 00 00 00 00 00`` = no PIN):
 
@@ -39,7 +41,10 @@ Write commands (same source, verified live on PrimeX 4.07 and 5.00): request
 * op 8 set output: ``[terminal:2 LE][1 on | 0 off:2 LE]``;
 * op 9 set zone bypass: ``[terminal:2 LE][0 bypass | 2 unbypass:2 LE]``,
   plus 1 in the value for the terminal's second zone (half B);
-* op 16 reset partitions (alarm memory): ``[partition bitmask:4 LE]``.
+* op 16 reset partitions (alarm memory): ``[partition bitmask:4 LE]``;
+* op 0x39 clear the call queue (libdriver "stop_actions", the keypad's "Canc.
+  telefonate"): ``[partition bitmask:4 LE][2]``; the other actions of this
+  opcode (stop alarms, reset alarm memory) are never sent.
 
 Pitscheider's library does not decode the command response ("complete
 handling of the command response envelope" is listed as not implemented), so
@@ -184,15 +189,22 @@ _STATUS_PREFIX = {
     0x5E: bytes(32),
 }
 
-# Write commands (Pitscheider's CommandOperation). Sent only by the
-# async_set_*/async_reset_* methods, which the integration calls only when the
-# user enabled native commands.
+# Write commands (Pitscheider's CommandOperation, plus libdriver's
+# "stop_actions"). Sent only by the async_set_*/async_reset_*/async_clear_*
+# methods.
 _OP_SET_ARMING = 3
 _OP_SET_OUTPUT = 8
 _OP_SET_ZONE_BYPASS = 9
 _OP_RESET_PARTITIONS = 16
+# "stop_actions": [partition bitmask u32 LE][action]. The action picks stop
+# alarms (1), clear the call queue (2) or reset alarm memory (3) (PrimeX 4.07
+# firmware command handler); only the call-queue action is ever sent, and it
+# clears every channel's queue whatever the mask (the keypad's "Canc.
+# telefonate").
+_OP_STOP_ACTIONS = 0x39
+_ACTION_CLEAR_CALLS = 2
 # The only state-changing opcodes ever sent (literal, see _STATUS_OPS).
-_WRITE_OPS = frozenset({3, 8, 9, 16})
+_WRITE_OPS = frozenset({3, 8, 9, 16, 0x39})
 _PIN_LEN = 6
 _PIN_PAD = 0xFF
 _OUTPUT_ON = 1
@@ -480,6 +492,17 @@ def reset_data(area_ids: Iterable[int]) -> bytes:
     if not mask:
         raise ValueError("no partitions to reset")
     return mask.to_bytes(4, "little")
+
+
+def clear_calls_data(area_ids: Iterable[int]) -> bytes:
+    """Encode op 0x39 data for the call-queue clear: ``[bitmask:4 LE][2]``.
+
+    The panel clears every channel's queue whatever the mask; it only checks
+    the mask against the partitions it may act on, so the configured areas are
+    sent. The action byte is a literal: stopping alarms or resetting alarm
+    memory through this opcode is never possible.
+    """
+    return reset_data(area_ids) + bytes([_ACTION_CLEAR_CALLS])
 
 
 def zone_bypass_data(
@@ -1482,6 +1505,21 @@ class Local6004Client:
         """Reset the partitions' alarm memory (op 16)."""
         data = _validated(_OP_RESET_PARTITIONS, lambda: reset_data(area_ids))
         await self._command(_OP_RESET_PARTITIONS, data, pin, timeout)
+
+    async def async_clear_calls(
+        self,
+        area_ids: Iterable[int],
+        *,
+        pin: str | None = None,
+        timeout: float = COMMAND_TIMEOUT,
+    ) -> None:
+        """Clear the panel's outgoing call queue (op 0x39, action 2).
+
+        Pending calls and reports are dropped and an ongoing call is ended;
+        nothing else changes (no alarm, output or memory is touched).
+        """
+        data = _validated(_OP_STOP_ACTIONS, lambda: clear_calls_data(area_ids))
+        await self._command(_OP_STOP_ACTIONS, data, pin, timeout)
 
     async def _command(
         self,
