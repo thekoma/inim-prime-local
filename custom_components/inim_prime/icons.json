@@ -62,6 +62,12 @@
       },
       "comm_internet": {
         "default": "mdi:lan-disconnect"
+      },
+      "shutter": {
+        "default": "mdi:window-shutter",
+        "state": {
+          "on": "mdi:window-shutter-open"
+        }
       }
     },
     "switch": {

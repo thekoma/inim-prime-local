@@ -2,7 +2,9 @@
 
 Wired INIM zones have no door / window / motion field. What the configuration
 read natively at setup does say for sure (see NativeZoneDef) wins over the
-label: a fire zone, a roller-shutter or a shock detector. Then the label guess
+label: a fire zone, a roller-shutter or a shock detector (a shutter reads as an
+opening: binary sensors have no shutter class, the entity gets shutter icons
+instead, see binary_sensor.py). Then the label guess
 (zone_guess.py). Weaker configuration hints are used only when the label says
 nothing: a fault or hold-up zone reads as problem or safety, a 24-hour zone as
 tamper, an interior zone as motion, a delayed or chime zone as a door.
@@ -33,7 +35,7 @@ def zone_device_class(
         if zone.is_fire:
             return BinarySensorDeviceClass.SMOKE
         if zone.is_shutter:
-            return BinarySensorDeviceClass.WINDOW
+            return BinarySensorDeviceClass.OPENING
         if zone.is_shock:
             return BinarySensorDeviceClass.VIBRATION
     guessed = guess_device_class(label, language)

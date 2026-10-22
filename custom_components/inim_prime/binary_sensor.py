@@ -111,9 +111,12 @@ class InimZoneBinarySensor(InimBaseBinarySensor):
             language = label_language(coordinator)
             # Device class -> a state-aware icon: from the panel configuration
             # where it is explicit, else guessed from the initial label.
-            self._attr_device_class = zone_device_class(
-                native_zone(coordinator, zone_id), zone.label, language
-            )
+            native = native_zone(coordinator, zone_id)
+            self._attr_device_class = zone_device_class(native, zone.label, language)
+            if native is not None and native.is_shutter:
+                # Binary sensors have no shutter class: keep "opening" and
+                # show shutter icons (icons.json) instead.
+                self._attr_translation_key = "shutter"
             # Group the zone under a per-room device when enabled and a room is
             # recognised in the label; otherwise it stays on the panel device.
             if group_zones_by_room(coordinator):

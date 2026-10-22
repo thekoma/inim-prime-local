@@ -24,7 +24,7 @@ _PLAIN = NativeZoneDef(7, "Zone 7", 7, (0,), zone_type=0, options=0, options1=0,
     [
         # Explicit configuration wins over the label.
         ({"options2": 0x04}, "Front Door", BinarySensorDeviceClass.SMOKE),
-        ({"sensor": 1}, "Garage", BinarySensorDeviceClass.WINDOW),
+        ({"sensor": 1}, "Garage", BinarySensorDeviceClass.OPENING),
         ({"sensor": 2}, "Front Door", BinarySensorDeviceClass.VIBRATION),
         # Otherwise the label decides.
         ({}, "Front Door", BinarySensorDeviceClass.DOOR),
@@ -99,4 +99,8 @@ async def test_zone_sensor_uses_the_configuration(
         "binary_sensor", DOMAIN, f"{mock_config_entry.entry_id}_zone_1"
     )
     assert entity_id is not None
-    assert hass.states.get(entity_id).attributes["device_class"] == "window"
+    # No shutter class for binary sensors: "opening", with the shutter icons.
+    assert hass.states.get(entity_id).attributes["device_class"] == "opening"
+    assert registry.entities[entity_id].translation_key == "shutter"
+    # The entity keeps the zone label as its name.
+    assert hass.states.get(entity_id).name.endswith("Front Door")

@@ -141,6 +141,9 @@
       },
       "comm_internet": {
         "name": "Guasto comunicazione"
+      },
+      "shutter": {
+        "name": "Tapparella"
       }
     },
     "switch": {

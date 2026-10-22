@@ -141,6 +141,9 @@
       },
       "comm_internet": {
         "name": "Communication fault"
+      },
+      "shutter": {
+        "name": "Roller shutter"
       }
     },
     "switch": {
