@@ -40,7 +40,9 @@ from .client import (
     scene_is_active,
 )
 from .const import (
+    CONF_REQUIRE_CODE,
     DEFAULT_CYCLE_TIMEOUT,
+    DEFAULT_REQUIRE_CODE,
     DOMAIN,
     EV_ALARM,
     EV_ARM,
@@ -144,6 +146,15 @@ class InimDataUpdateCoordinator(DataUpdateCoordinator[InimData]):
             name=DOMAIN,
             update_interval=timedelta(seconds=NATIVE_POLL_INTERVAL),
         )
+
+    @property
+    def require_code(self) -> bool:
+        """Whether a panel-verified user code is required before arm/disarm.
+
+        A config option (off by default); changing it reloads the entry, so
+        entities can read it once at construction.
+        """
+        return bool(self.config_entry.options.get(CONF_REQUIRE_CODE, DEFAULT_REQUIRE_CODE))
 
     async def _async_update_data(self) -> InimData:
         """Read the live panel state, tolerating a transient failure.

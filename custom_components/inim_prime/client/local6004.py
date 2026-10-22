@@ -23,13 +23,14 @@ context op-code; reads use op 0x11 (start) / 0x10 (continue) with
 ⚠️ Opcode allow-lists: this module only ever emits the two memory-read
 opcodes, the read-only *status* commands (op 6 partition statuses, op 7
 terminal statuses, op 0x0D system status, op 0x31 power values, op 0x5E GSM
-status) and the five *write* commands below. It never builds a
-memory-write/program frame (the same framing with another opcode — on a
-production panel a stray write could brick it). ``_read_cmd``,
-``_status_cmd`` and ``_write_cmd`` each check their opcode against their own
-literal allow-list and raise :class:`OpcodeNotAllowed` otherwise
-(:class:`ReadOnlyViolation` for the read-only ones; an explicit check, not an
-``assert``, so ``python -O`` cannot drop it).
+status), the read-only *code check* query (op 0x04, validates a user code) and
+the five *write* commands below. It never builds a memory-write/program frame
+(the same framing with another opcode — on a production panel a stray write
+could brick it). ``_read_cmd``, ``_status_cmd``, ``check_code_cmd`` and
+``_write_cmd`` each check their opcode against their own literal allow-list and
+raise :class:`OpcodeNotAllowed` otherwise (:class:`ReadOnlyViolation` for the
+read-only ones; an explicit check, not an ``assert``, so ``python -O`` cannot
+drop it).
 
 Write commands (same source, verified live on PrimeX 4.07 and 5.00; op 0x39 from
 libdriver and the PrimeX firmware): request
@@ -188,6 +189,13 @@ _STATUS_PREFIX = {
     0x31: b"\x00",
     0x5E: bytes(32),
 }
+
+# Read-only code check (op 0x04, "controllo_codice"/get_code_type): validates a
+# user code and returns its type/permissions without changing anything. It is
+# read-only but carries the code in its data section, so it has its own builder
+# and one-element allow-list, like the status and write builders.
+_OP_CHECK_CODE = 4
+_QUERY_OPS = frozenset({_OP_CHECK_CODE})
 
 # Write commands (Pitscheider's CommandOperation, plus libdriver's
 # "stop_actions"). Sent only by the async_set_*/async_reset_*/async_clear_*
@@ -465,6 +473,24 @@ def _write_cmd(op: int, data: bytes, pin: str | None = None) -> bytes:
     if op not in _WRITE_OPS:
         raise OpcodeNotAllowed(f"write opcode {op}")
     return op.to_bytes(4, "little") + encode_pin(pin) + data
+
+
+def check_code_cmd(code: str) -> bytes:
+    """Build the read-only code-check query (op 0x04): ``[op:4 LE][no-PIN:6][code:6]``.
+
+    op 0x04 ("controllo_codice"/get_code_type) validates a user code and returns
+    its type. The code to check goes in the 6-byte DATA section (one digit per
+    byte, padded 0xFF — the same encoding as the PIN field), while the PIN field
+    carries the no-PIN marker: the command handlers ignore the PIN field over
+    LAN, so the code to check is passed as data (verified live on 4.07/5.00).
+    Read-only, gated by its own allow-list like the status and write builders;
+    a code that is not 1-6 digits raises ``ValueError``.
+    """
+    if _OP_CHECK_CODE not in _QUERY_OPS:
+        raise ReadOnlyViolation(f"query opcode {_OP_CHECK_CODE}")
+    if code is None:
+        raise ValueError("a code is required")
+    return _OP_CHECK_CODE.to_bytes(4, "little") + _NO_PIN + encode_pin(code)
 
 
 def _check_area_id(area_id: int) -> None:
@@ -890,6 +916,40 @@ def decode_gsm_status(resp: bytes) -> NativeGsmStatus:
         networks=tuple(name for i, name in _GSM_NETWORK_BITS if networks >> i & 1),
         signal=signal,
         operator_code=code if _GSM_OPERATOR_RE.fullmatch(code) else "",
+    )
+
+
+# Code check (op 0x04, "controllo_codice"/get_code_type) reply, after the 4-byte
+# echo: [code type][code index + area-permission map]. The type byte is 0 for an
+# unknown code and 0xFF for an empty field; a real code answers with its non-zero
+# type (live on 5.00 a valid user code -> 0x01). The rest is the code's index and
+# area-permission map, kept raw for a later per-area check but not decoded yet.
+_CODE_CHECK_MIN_LEN = 4 + 1
+_CODE_TYPE_NONE = frozenset({0x00, 0xFF})
+
+
+@dataclass(frozen=True)
+class NativeCodeCheck:
+    """The result of a code check (op 0x04): whether the code is valid, plus raw."""
+
+    valid: bool
+    code_type: int
+    raw: bytes  # the reply after the echo (code index + area-permission map)
+
+
+def decode_code_check(resp: bytes) -> NativeCodeCheck:
+    """Decode a code-check (op 0x04) response; a short one raises ``ValueError``.
+
+    A code is valid when its type byte is neither 0 (unknown code) nor 0xFF
+    (empty field).
+    """
+    if len(resp) < _CODE_CHECK_MIN_LEN:
+        raise ValueError(f"short code-check response ({len(resp)} bytes)")
+    code_type = resp[4]
+    return NativeCodeCheck(
+        valid=code_type not in _CODE_TYPE_NONE,
+        code_type=code_type,
+        raw=resp[4:],
     )
 
 
@@ -1410,6 +1470,22 @@ class Local6004Client:
 
     async def _get_gsm_status(self) -> NativeGsmStatus:
         return decode_gsm_status(await self._status(_status_cmd(_OP_GSM_STATUS)))
+
+    async def async_check_code(
+        self, code: str, timeout: float = STATUS_TIMEOUT
+    ) -> NativeCodeCheck:
+        """Verify a user code against the panel, returning its validity (read-only).
+
+        Sends op 0x04 ("controllo_codice"): the panel checks the code and answers
+        with its type. Nothing is armed, disarmed or written. The code is only
+        used to build the frame; it is never stored or logged. A code that is not
+        1-6 digits raises :class:`NativeCommandInvalid` before any I/O.
+        """
+        body = _validated(_OP_CHECK_CODE, lambda: check_code_cmd(code))
+        return await self._live(self._check_code(body), timeout)
+
+    async def _check_code(self, body: bytes) -> NativeCodeCheck:
+        return decode_code_check(await self._status(body))
 
     async def async_get_output_states(
         self, terminals: set[int], timeout: float = STATUS_TIMEOUT

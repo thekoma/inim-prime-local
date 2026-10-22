@@ -54,6 +54,7 @@ def _make_coordinator(areas: list[Area], scenarios: list[Scenario] | None = None
     )
     coordinator.structure = Local6004Structure()
     coordinator.force_arm_on_open = False
+    coordinator.require_code = False
     coordinator.config_entry = MagicMock(entry_id="abc123", title="INIM Prime")
     coordinator.data = InimData(
         version=_VERSION,
@@ -240,6 +241,18 @@ def test_apply_scenario_button_properties(two_areas) -> None:
     assert button.name == "Away"
     assert button.has_entity_name is True
     assert button.available is True
+
+
+def test_apply_scenario_button_disabled_when_code_required(two_areas) -> None:
+    """With the require-code option on, scenario buttons are unavailable.
+
+    A button cannot prompt for a code, so arming must go through the area alarm
+    panels (which show a keypad); the options screen explains this.
+    """
+    coordinator = _make_coordinator(two_areas, _scenarios())
+    coordinator.require_code = True
+    button = InimApplyScenarioButton(coordinator, _scenarios()[0])
+    assert button.available is False
 
 
 async def test_apply_scenario_press_sends_its_modes(two_areas) -> None:

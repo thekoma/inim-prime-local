@@ -1205,6 +1205,78 @@ async def test_gsm_status_over_the_persistent_connection(
     assert _decrypt(pairs[0][1].sent[0]) == b"\x5e\x00\x00\x00" + bytes(32)
 
 
+# ----------------------------------------------------------------- code check
+def _code_resp(code_type: int = 1) -> bytes:
+    """A code-check (op 0x04) reply: 4-byte echo + 14 data bytes (type first)."""
+    data = bytes([code_type]) + b"\x00\xff\xff\xff\x03\x00\x00\xff\xff\xff\xff\xff\xff"
+    return (~m._OP_CHECK_CODE & 0xFFFFFFFF).to_bytes(4, "little") + data
+
+
+def test_check_code_cmd_bytes() -> None:
+    # [op:4 LE][no-PIN:6][code:6], the code one digit per byte padded 0xFF.
+    assert m.check_code_cmd("123456") == (
+        b"\x04\x00\x00\x00" + b"\x74\x00\x00\x00\x00\x00" + bytes([1, 2, 3, 4, 5, 6])
+    )
+    assert m.check_code_cmd("12") == (
+        b"\x04\x00\x00\x00" + b"\x74\x00\x00\x00\x00\x00" + bytes([1, 2, 0xFF, 0xFF, 0xFF, 0xFF])
+    )
+
+
+def test_check_code_cmd_bad_code_raises() -> None:
+    with pytest.raises(ValueError, match="PIN must be 1-6"):
+        m.check_code_cmd("abc")
+    with pytest.raises(ValueError, match="code is required"):
+        m.check_code_cmd(None)  # type: ignore[arg-type]
+
+
+def test_check_code_cmd_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    # op 0x04 must be in the query allow-list or the builder refuses it.
+    monkeypatch.setattr(m, "_OP_CHECK_CODE", 3)
+    with pytest.raises(m.ReadOnlyViolation):
+        m.check_code_cmd("123456")
+
+
+def test_decode_code_check_valid() -> None:
+    result = m.decode_code_check(_code_resp(code_type=1))
+    assert result == m.NativeCodeCheck(
+        valid=True,
+        code_type=1,
+        raw=b"\x01\x00\xff\xff\xff\x03\x00\x00\xff\xff\xff\xff\xff\xff",
+    )
+
+
+@pytest.mark.parametrize("code_type", [0x00, 0xFF])
+def test_decode_code_check_invalid(code_type: int) -> None:
+    result = m.decode_code_check(_code_resp(code_type=code_type))
+    assert result.valid is False
+    assert result.code_type == code_type
+
+
+def test_decode_code_check_short_raises() -> None:
+    with pytest.raises(ValueError, match="short code-check"):
+        m.decode_code_check(b"\xfb\xff\xff\xff")  # echo only, no type byte
+
+
+async def test_check_code_over_the_persistent_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairs = _patch_sessions(monkeypatch, [[_resp(_code_resp(code_type=1))]])
+    client = m.Local6004Client("host", "pass")
+    result = await client.async_check_code("123456")
+    assert result.valid is True
+    assert result.code_type == 1
+    assert _decrypt(pairs[0][1].sent[0]) == (
+        b"\x04\x00\x00\x00" + b"\x74\x00\x00\x00\x00\x00" + bytes([1, 2, 3, 4, 5, 6])
+    )
+
+
+async def test_check_code_rejects_a_bad_format_before_any_io() -> None:
+    # No connection is patched: a malformed code must raise before opening one.
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.NativeCommandInvalid):
+        await client.async_check_code("nope")
+
+
 # --------------------------------------------------------------- output states
 def test_decode_output_states() -> None:
     records = [
