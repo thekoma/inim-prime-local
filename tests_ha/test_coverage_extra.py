@@ -20,6 +20,8 @@ from custom_components.inim_prime.client import (
     AreaState,
     Fault,
     Output,
+    PanelStatus,
+    Power,
     Scenario,
     Version,
     Zone,
@@ -30,7 +32,7 @@ from custom_components.inim_prime.coordinator import (
 )
 from custom_components.inim_prime.switch import InimOutputSwitch, InimZoneBypassSwitch
 
-VERSION = Version(raw="4.07 PX020", service=False)
+VERSION = Version(raw="4.07 PX020")
 
 
 def _data(**overrides) -> InimData:
@@ -58,6 +60,8 @@ def _data(**overrides) -> InimData:
         scenarios=[Scenario(id=1, label="Away", active=False)],
         outputs=[Output(id=1, label="Siren", state=0)],
         fault=Fault(vcc=13.7, has_faults=False),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     base.update(overrides)
     return InimData(**base)

@@ -26,9 +26,10 @@ A **local, offline-first** Home Assistant integration for **INIM Prime / PrimeX*
 | 🚪 **Zones** | `binary_sensor` (one per zone) | Open / closed in realtime; device class (and so the icon) from the panel programming where it is explicit (fire, shock, roller shutter — *moving*, since the detector senses the shutter moving, not its position, with shutter icons), otherwise guessed from the zone name in **12 languages** — window, door, garage, motion, smoke, gas, CO, water, vibration, tamper ([details](docs/known-limitations.md)) |
 | 🚫 **Zone bypass** | `switch` (one per zone) | Include / exclude a zone from arming |
 | ⚡ **Outputs** | `switch` (one per panel output) | Toggle panel outputs, named as programmed on the panel *(hidden by default)* |
-| 🔋 **Power & faults** | `sensor` + `binary_sensor` | Supply voltage, open-zone count, system fault + a per-fault breakdown (mains, battery, tamper, GSM, …) |
+| 🔋 **Power & faults** | `sensor` + `binary_sensor` | Supply and battery voltage, battery temperature and internal resistance, open-zone count, system fault + a per-fault breakdown (mains, battery, tamper — with which device reports it —, GSM, …) |
+| 📶 **GSM / LTE** | `sensor` | Signal level, with networks, operator code, VoLTE and the communicator's faults as attributes (only on panels with the module) |
 | 🧹 **Alarm memory** | `button` (one per area) | Clear alarm memory; per-area alarm-memory sensors |
-| 🩺 **Diagnostics** | device page | Panel model and firmware; downloadable diagnostics (LAN password redacted) |
+| 🩺 **Diagnostics** | `binary_sensor` + device page | Service mode (SERV jumper) and programming mode; panel model and firmware; downloadable diagnostics (LAN password redacted) |
 
 Only the areas you choose get entities (**Options → Areas to show**, by area number; until you save a choice, every area with a real name is shown and unused factory-default ones like `AREA 006` are skipped). The **output switches** and the **per-scenario "active" sensors** are hidden by default so your entity list stays clean — re-enable any you actually use.
 
@@ -80,7 +81,7 @@ Open **Configure** on the integration.
 
 ### How it reads the panel
 
-Every **2 seconds** the integration sends four read-only status commands over one persistent TCP connection: the areas, the zones, the outputs and the panel status (faults, tampers, supply voltage). Each answers in about 10 ms on a PrimeX 4.07, so a change shows up within ~2 s without any push setup, and the panel is not loaded. The integration has no polling options: there is nothing to tune.
+Every **2 seconds** the integration sends four read-only status commands over one persistent TCP connection: the areas, the zones, the outputs and the panel status (faults, tampers, voltages). Each answers in about 10 ms on a PrimeX 4.07, so a change shows up within ~2 s without any push setup, and the panel is not loaded. The battery temperature and internal resistance are read once a minute, and the GSM status every 5 minutes. The integration has no polling options: there is nothing to tune.
 
 **Built-in protection so HA never suffers:** each read has a 5 s ceiling and the whole cycle 20 s; a failed cycle keeps the last good state, and entities go *unavailable* only after 3 failed cycles in a row; after 3 failures the integration reads every 30 s until the panel answers again; and at most one cycle is ever in flight. See [polling & tuning](docs/polling-and-tuning.md).
 

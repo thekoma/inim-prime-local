@@ -14,18 +14,25 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.inim_prime.client import (
     FAULT_FLAG_KEYS,
+    GSM_NO_MODULE,
+    GSM_NOT_INITIALISED,
     Area,
     AreaMode,
     AreaState,
     Fault,
+    Gsm,
     Local6004Config,
     Local6004Error,
     Local6004Structure,
     NativeAreaStatus,
+    NativeGsmStatus,
     NativeObject,
+    NativePowerValues,
     NativeZoneDef,
     NativeZoneStatus,
     Output,
+    PanelStatus,
+    Power,
     Scenario,
     SceneDef,
     Version,
@@ -35,8 +42,10 @@ from custom_components.inim_prime.client import (
 from custom_components.inim_prime.const import (
     FAILURES_BEFORE_BACKOFF,
     FAILURES_BEFORE_UNAVAILABLE,
+    GSM_POLL_INTERVAL,
     NATIVE_BACKOFF_INTERVAL,
     NATIVE_POLL_INTERVAL,
+    SLOW_POLL_INTERVAL,
 )
 from custom_components.inim_prime.coordinator import (
     InimData,
@@ -82,7 +91,7 @@ async def test_cycle_builds_the_snapshot(
         flags=dict.fromkeys(FAULT_FLAG_KEYS, False),
         raw="00" * 12,
     )
-    assert data.version == Version(raw="4.07 PX020", service=False)
+    assert data.version == Version(raw="4.07 PX020")
     mock_local_client.async_get_zone_statuses.assert_awaited_once_with({1})
     mock_local_client.async_get_output_states.assert_awaited_once_with({1})
     mock_local_client.async_get_system_status.assert_awaited_once()
@@ -285,7 +294,7 @@ async def test_fault_and_version_from_the_system_status(
 ) -> None:
     """Faults, the supply voltage and the service flag come from op 0x0D."""
     mock_local_client.async_get_system_status.return_value = make_system_status(
-        supply=24.3, service=True, fault_mains=True
+        supply=24.3, service=True, fault_mains=True, tamper_sources={"readers": True}
     )
     coordinator = _make_coordinator(
         hass, mock_config_entry, mock_local_client, mock_local_config
@@ -297,7 +306,9 @@ async def test_fault_and_version_from_the_system_status(
     assert data.fault.has_faults is True
     assert data.fault.flags["fault_mains"] is True
     assert not data.fault.flags["low_battery"]
-    assert data.version.service is True
+    assert data.panel == PanelStatus(service=True, programming=False)
+    assert data.fault.tamper_sources == {"readers": True}
+    assert data.power == Power(battery_voltage=13.4, battery_temperature=27, battery_resistance=115)
     assert (data.version.firmware, data.version.model_name) == ("4.07", "PX020")
 
 
@@ -441,3 +452,141 @@ async def test_overlapping_refresh_coalesces(
     release.set()
     await first
     assert mock_local_client.async_get_area_statuses.await_count == 2  # seed + first
+
+
+async def test_power_values_read_once_a_minute(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The power values are read on the first cycle, then every SLOW_POLL_INTERVAL."""
+    clock = [1000.0]
+    monkeypatch.setattr(
+        "custom_components.inim_prime.coordinator.time.monotonic", lambda: clock[0]
+    )
+    coordinator = _make_coordinator(
+        hass, mock_config_entry, mock_local_client, mock_local_config
+    )
+    read = mock_local_client.async_get_power_values
+
+    await coordinator._async_update_data()
+    clock[0] += SLOW_POLL_INTERVAL - 1
+    read.return_value = NativePowerValues(battery_temperature=30, battery_resistance=120)
+    data = await coordinator._async_update_data()
+    assert read.await_count == 1
+    assert data.power.battery_temperature == 27  # the last reading is kept
+
+    clock[0] += 1
+    data = await coordinator._async_update_data()
+    assert read.await_count == 2
+    assert (data.power.battery_temperature, data.power.battery_resistance) == (30, 120)
+
+
+async def test_power_values_failure_keeps_the_cycle(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+) -> None:
+    """A panel that does not answer the power values still updates everything else."""
+    mock_local_client.async_get_power_values.side_effect = Local6004Error("no answer")
+    coordinator = _make_coordinator(
+        hass, mock_config_entry, mock_local_client, mock_local_config
+    )
+
+    data = await coordinator._async_update_data()
+
+    assert data.power == Power(battery_voltage=13.4)
+    assert coordinator._consecutive_failures == 0
+
+
+def _gsm_status(result: int = 0, **faults: bool) -> NativeGsmStatus:
+    return NativeGsmStatus(
+        result=result, faults=faults, networks=("4G",), signal=55, operator_code="00101"
+    )
+
+
+async def test_gsm_status_read_every_five_minutes(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    make_system_status,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The GSM status is read on the first cycle, then every GSM_POLL_INTERVAL."""
+    clock = [1000.0]
+    monkeypatch.setattr(
+        "custom_components.inim_prime.coordinator.time.monotonic", lambda: clock[0]
+    )
+    mock_local_client.async_get_gsm_status.return_value = _gsm_status(roaming=True)
+    mock_local_client.async_get_system_status.return_value = replace(
+        make_system_status(), volte=True
+    )
+    coordinator = _make_coordinator(
+        hass, mock_config_entry, mock_local_client, mock_local_config
+    )
+    read = mock_local_client.async_get_gsm_status
+
+    data = await coordinator._async_update_data()
+    assert data.gsm == Gsm(
+        state="ok",
+        signal=55,
+        networks=("4G",),
+        operator_code="00101",
+        volte=True,
+        faults={"roaming": True},
+    )
+    clock[0] += GSM_POLL_INTERVAL - 1
+    await coordinator._async_update_data()
+    assert read.await_count == 1
+    clock[0] += 1
+    await coordinator._async_update_data()
+    assert read.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("result", "state"), [(GSM_NOT_INITIALISED, "not_initialised"), (9, "error")]
+)
+async def test_gsm_status_not_ok_has_no_signal(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    result: int,
+    state: str,
+) -> None:
+    """A module that is not ready reports its state, without a signal level."""
+    mock_local_client.async_get_gsm_status.return_value = _gsm_status(result)
+    coordinator = _make_coordinator(
+        hass, mock_config_entry, mock_local_client, mock_local_config
+    )
+
+    data = await coordinator._async_update_data()
+
+    assert data.gsm is not None
+    assert (data.gsm.state, data.gsm.signal) == (state, None)
+
+
+async def test_gsm_status_without_module_or_answer(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+) -> None:
+    """No GSM module, or no answer at all, leaves the GSM data out."""
+    mock_local_client.async_get_gsm_status.return_value = _gsm_status(GSM_NO_MODULE)
+    coordinator = _make_coordinator(
+        hass, mock_config_entry, mock_local_client, mock_local_config
+    )
+    assert (await coordinator._async_update_data()).gsm is None
+
+    mock_local_client.async_get_gsm_status.side_effect = Local6004Error("no answer")
+    coordinator = _make_coordinator(
+        hass, mock_config_entry, mock_local_client, mock_local_config
+    )
+    data = await coordinator._async_update_data()
+    assert data.gsm is None
+    assert coordinator._consecutive_failures == 0

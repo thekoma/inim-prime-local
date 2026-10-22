@@ -5,8 +5,10 @@ The integration's only channel to the panel. What it reads and sends:
 * **static structure** — which partitions, zones, arming scenarios and outputs
   exist, their labels and the zones' programmed kind, read once at setup (see
   :class:`Local6004Structure`), with the **zone -> area** mapping;
-* **live status** — partitions (op 6), terminals (op 7: zones and outputs) and
-  the panel-wide faults, tampers and voltages (op 0x0D), polled;
+* **live status** — partitions (op 6), terminals (op 7: zones and outputs), the
+  panel-wide faults, tampers and voltages (op 0x0D), polled, and the battery
+  power values (op 0x31) and the LTE communicator status (op 0x5E), polled
+  less often;
 * **multi-active scenes** — each arming scenario's per-partition target mode
   (``away``/``stay``/``disarm``); a scenario is "active" when every partition it
   targets currently matches that mode;
@@ -20,8 +22,8 @@ context op-code; reads use op 0x11 (start) / 0x10 (continue) with
 
 ⚠️ Opcode allow-lists: this module only ever emits the two memory-read
 opcodes, the read-only *status* commands (op 6 partition statuses, op 7
-terminal statuses, op 0x0D system status) and the four *write* commands below. It never builds a
-memory-write/program frame (the same framing with another opcode — on a
+terminal statuses, op 0x0D system status, op 0x31 power values, op 0x5E GSM
+status) and the four *write* commands below. It never builds a memory-write/program frame (the same framing with another opcode — on a
 production panel a stray write could brick it). ``_read_cmd``,
 ``_status_cmd`` and ``_write_cmd`` each check their opcode against their own
 literal allow-list and raise :class:`OpcodeNotAllowed` otherwise
@@ -158,12 +160,26 @@ _STEP_ERRORS = (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError)
 # Read-only system status (libdriver "read_status"): faults, panel flags and the
 # supply voltages; Prime/STUDIO polls it about once a second while monitoring.
 _OP_SYSTEM_STATUS = 0x0D
+# Read-only power values (libdriver "get_power_values"): battery temperature and
+# internal resistance, output voltages and currents; Prime/STUDIO's Power page.
+_OP_POWER_VALUES = 0x31
+# Read-only LTE communicator status (libdriver "read_gsm_4g_data"): signal,
+# networks, faults, operator code. Prime/STUDIO's GSM page. The panel asks the
+# modem for it, so it is read rarely.
+_OP_GSM_STATUS = 0x5E
 # The only status (read-only command) opcodes ever sent. Literal, so a renamed
 # or mistyped constant above cannot widen it.
-_STATUS_OPS = frozenset({6, 7, 0x0D})
+_STATUS_OPS = frozenset({6, 7, 0x0D, 0x31, 0x5E})
 # What precedes a status command's own data: the no-PIN marker for the live
-# partition and terminal status, a single 0x00 for the system status.
-_STATUS_PREFIX = {6: _NO_PIN, 7: _NO_PIN, 0x0D: b"\x00"}
+# partition and terminal status, a single 0x00 for the system status and the
+# power values, 32 zero bytes for the GSM status (as Prime/STUDIO sends it).
+_STATUS_PREFIX = {
+    6: _NO_PIN,
+    7: _NO_PIN,
+    0x0D: b"\x00",
+    0x31: b"\x00",
+    0x5E: bytes(32),
+}
 
 # Write commands (Pitscheider's CommandOperation). Sent only by the
 # async_set_*/async_reset_* methods, which the integration calls only when the
@@ -728,9 +744,16 @@ _SYSTEM_FAULT_BITS: dict[str, tuple[int, int]] = {
 }
 # Tampers the panel also reports one by one (panel dislodged and opened,
 # readers, keypads, expansions): any of them raises "tamper" too.
-_SYSTEM_TAMPER_BITS = ((6, 0), (6, 1), (10, 6), (10, 7), (11, 0))
+_SYSTEM_TAMPER_BITS: dict[str, tuple[int, int]] = {
+    "panel_dislodged": (6, 0),
+    "panel_open": (6, 1),
+    "readers": (10, 6),
+    "keypads": (10, 7),
+    "expansions": (11, 0),
+}
 _SYSTEM_SERVICE = (6, 3)  # the SERV jumper: panel in service
 _SYSTEM_PROGRAMMING = (6, 4)
+_SYSTEM_VOLTE = (13, 0)  # the LTE communicator has VoLTE active
 _SYSTEM_SUPPLY_V = 16  # switching supply output
 _SYSTEM_BATTERY_V = 18
 
@@ -747,6 +770,10 @@ class NativeSystemStatus:
     programming: bool
     # The fault word and panel flags as read, for diagnostics.
     raw: bytes
+    # Which device reports a tamper (keys of _SYSTEM_TAMPER_BITS); any of them
+    # also raises the "tamper" fault.
+    tamper_sources: dict[str, bool] = field(default_factory=dict)
+    volte: bool = False
 
 
 def decode_system_status(resp: bytes) -> NativeSystemStatus:
@@ -759,7 +786,8 @@ def decode_system_status(resp: bytes) -> NativeSystemStatus:
         return bool(d[pos[0]] >> pos[1] & 1)
 
     faults = {name: bit(pos) for name, pos in _SYSTEM_FAULT_BITS.items()}
-    faults["tamper"] = faults["tamper"] or any(bit(pos) for pos in _SYSTEM_TAMPER_BITS)
+    sources = {name: bit(pos) for name, pos in _SYSTEM_TAMPER_BITS.items()}
+    faults["tamper"] = faults["tamper"] or any(sources.values())
     return NativeSystemStatus(
         faults={key: faults[key] for key in FAULT_FLAG_KEYS},
         has_faults=any(d[:_SYSTEM_FAULT_WORD]) or faults["tamper"],
@@ -769,6 +797,94 @@ def decode_system_status(resp: bytes) -> NativeSystemStatus:
         service=bit(_SYSTEM_SERVICE),
         programming=bit(_SYSTEM_PROGRAMMING),
         raw=bytes(d[:12]),
+        tamper_sources=sources,
+        volte=bit(_SYSTEM_VOLTE),
+    )
+
+
+# Power values (op 0x31) reply, after the 4-byte echo: u16 LE fields as
+# Prime/STUDIO's Power page reads them (Living_Monitoring_NEW::LeggiTRPower);
+# 0xFFFF = not reported. Checked on a live PrimeX 5.00 against that page.
+_POWER_VALUES_LEN = 4 + 48
+_POWER_BATTERY_TEMP = 6  # degrees Celsius
+_POWER_BATTERY_RESISTANCE = 8  # milliohm
+_POWER_NOT_REPORTED = 0xFFFF
+
+
+@dataclass(frozen=True)
+class NativePowerValues:
+    """The battery readings of the power values (op 0x31); None when not reported."""
+
+    battery_temperature: int | None
+    battery_resistance: int | None  # milliohm
+
+
+def decode_power_values(resp: bytes) -> NativePowerValues:
+    """Decode a power-values (op 0x31) response; a short one raises ``ValueError``."""
+    if len(resp) < _POWER_VALUES_LEN:
+        raise ValueError(f"short power-values response ({len(resp)} bytes)")
+    d = resp[4:_POWER_VALUES_LEN]
+
+    def value(offset: int) -> int | None:
+        raw = int.from_bytes(d[offset : offset + 2], "little")
+        return None if raw == _POWER_NOT_REPORTED else raw
+
+    return NativePowerValues(
+        battery_temperature=value(_POWER_BATTERY_TEMP),
+        battery_resistance=value(_POWER_BATTERY_RESISTANCE),
+    )
+
+
+# GSM status (op 0x5E) reply, after the 4-byte echo (Centrale6.dll
+# Comm::LeggiInfoGSM4G): [result][fault bits][network bits][signal 0-100], then
+# identifiers (IMSI at 34, ICCID at 54), the operator code (MCC+MNC, ASCII) at
+# 78 and the modem's ATI text (with the IMEI) at 98. Only the first four bytes
+# and the operator code are ever decoded: the identifiers are never kept.
+_GSM_OPERATOR = slice(78, 98)
+_GSM_MIN_LEN = 4 + _GSM_OPERATOR.stop
+GSM_OK = 0
+GSM_NO_MODULE = 2
+GSM_NOT_INITIALISED = 3  # Prime/STUDIO: "check the SIM"
+_GSM_FAULT_BITS = (
+    "low_signal",
+    "low_battery",
+    "gprs",
+    "sim_error",
+    "no_signal",
+    "no_operator",
+    "module",
+    "roaming",
+)
+_GSM_NETWORK_BITS = ((1, "2G"), (2, "3G"), (3, "4G"))
+_GSM_OPERATOR_RE = re.compile(r"\d{5,6}")
+
+
+@dataclass(frozen=True)
+class NativeGsmStatus:
+    """The LTE communicator status (op 0x5E), without any identifier."""
+
+    # GSM_OK, GSM_NO_MODULE, GSM_NOT_INITIALISED, or another (error) code.
+    result: int
+    faults: dict[str, bool]
+    networks: tuple[str, ...]
+    signal: int  # 0-100
+    # MCC+MNC (e.g. "22201"), "" when not registered.
+    operator_code: str
+
+
+def decode_gsm_status(resp: bytes) -> NativeGsmStatus:
+    """Decode a GSM-status (op 0x5E) response; a short one raises ``ValueError``."""
+    if len(resp) < _GSM_MIN_LEN:
+        raise ValueError(f"short GSM-status response ({len(resp)} bytes)")
+    result, faults, networks, signal = resp[4:8]
+    operator = resp[4 + _GSM_OPERATOR.start : 4 + _GSM_OPERATOR.stop].split(b"\0")[0]
+    code = operator.decode("ascii", "replace")
+    return NativeGsmStatus(
+        result=result,
+        faults={name: bool(faults >> i & 1) for i, name in enumerate(_GSM_FAULT_BITS)},
+        networks=tuple(name for i, name in _GSM_NETWORK_BITS if networks >> i & 1),
+        signal=signal,
+        operator_code=code if _GSM_OPERATOR_RE.fullmatch(code) else "",
     )
 
 
@@ -1211,6 +1327,20 @@ class Local6004Client:
 
     async def _get_system_status(self) -> NativeSystemStatus:
         return decode_system_status(await self._status(_status_cmd(_OP_SYSTEM_STATUS)))
+
+    async def async_get_power_values(self, timeout: float = STATUS_TIMEOUT) -> NativePowerValues:
+        """Return the battery temperature and internal resistance (read-only)."""
+        return await self._live(self._get_power_values(), timeout)
+
+    async def _get_power_values(self) -> NativePowerValues:
+        return decode_power_values(await self._status(_status_cmd(_OP_POWER_VALUES)))
+
+    async def async_get_gsm_status(self, timeout: float = STATUS_TIMEOUT) -> NativeGsmStatus:
+        """Return the LTE communicator status, without identifiers (read-only)."""
+        return await self._live(self._get_gsm_status(), timeout)
+
+    async def _get_gsm_status(self) -> NativeGsmStatus:
+        return decode_gsm_status(await self._status(_status_cmd(_OP_GSM_STATUS)))
 
     async def async_get_output_states(
         self, terminals: set[int], timeout: float = STATUS_TIMEOUT

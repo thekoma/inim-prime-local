@@ -26,6 +26,8 @@ from custom_components.inim_prime.client import (
     NativeAreaStatus,
     NativeCommandNotSent,
     NativeZonesNotReady,
+    PanelStatus,
+    Power,
     Version,
 )
 from custom_components.inim_prime.const import DOMAIN
@@ -66,12 +68,14 @@ def entity_factory(
             hass, mock_config_entry, mock_local_client, mock_local_config
         )
         coordinator.data = InimData(
-            version=Version(raw="4.07 PX500", service=False),
+            version=Version(raw="4.07 PX500"),
             areas=[area],
             zones=[],
             scenarios=[],
             outputs=[],
             fault=Fault(vcc=13.7, has_faults=False),
+            power=Power(battery_voltage=13.4),
+            panel=PanelStatus(service=False, programming=False),
         )
         # The command re-reads the panel right after it; not under test here.
         coordinator.async_refresh = AsyncMock()

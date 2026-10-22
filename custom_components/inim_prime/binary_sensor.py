@@ -64,6 +64,8 @@ async def async_setup_entry(
         _add(InimFaultBinarySensor(coordinator))
         for key in FAULT_FLAG_KEYS:
             _add(InimFaultFlagBinarySensor(coordinator, key))
+        for key in PANEL_MODE_KEYS:
+            _add(InimPanelModeBinarySensor(coordinator, key))
 
         for zone in coordinator.data.zones:
             _add(InimZoneBinarySensor(coordinator, zone.id))
@@ -259,6 +261,43 @@ class InimFaultFlagBinarySensor(InimBaseBinarySensor):
     def is_on(self) -> bool:
         """Return True if this specific fault flag is set."""
         return self.coordinator.data.fault.flags.get(self._flag_key, False)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return which device reports a tamper (tamper sensor only)."""
+        if self._flag_key != "tamper":
+            return None
+        return dict(self.coordinator.data.fault.tamper_sources)
+
+
+# Panel modes shown as diagnostic binary sensors: the translation key of each.
+PANEL_MODE_KEYS: dict[str, str] = {
+    "service": "service_mode",
+    "programming": "programming_mode",
+}
+
+
+class InimPanelModeBinarySensor(InimBaseBinarySensor):
+    """A diagnostic binary sensor for a panel mode: service or programming.
+
+    Service is the panel's SERV jumper (maintenance); programming is an open
+    programming session (Prime/STUDIO or the keypad).
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: InimDataUpdateCoordinator, key: str) -> None:
+        """Initialize the panel-mode binary sensor."""
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{PANEL_MODE_KEYS[key]}"
+        self._attr_translation_key = PANEL_MODE_KEYS[key]
+
+    @property
+    def is_on(self) -> bool:
+        """Return True while the panel is in this mode."""
+        panel = self.coordinator.data.panel
+        return panel.service if self._key == "service" else panel.programming
 
 
 class InimSceneActiveBinarySensor(InimBaseBinarySensor):

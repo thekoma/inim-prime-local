@@ -71,6 +71,12 @@ DEFAULT_NAME: Final = "INIM Prime"
 
 # Seconds between live-state reads (a handful of ~10 ms status commands).
 NATIVE_POLL_INTERVAL: Final = 2
+# Seconds between reads of the slow-changing values (battery temperature and
+# internal resistance), within the regular cycle.
+SLOW_POLL_INTERVAL: Final = 60
+# Seconds between reads of the LTE communicator status: the panel queries the
+# modem for it, so it is read rarely.
+GSM_POLL_INTERVAL: Final = 300
 # Seconds between reads once FAILURES_BEFORE_BACKOFF cycles in a row failed, so
 # a panel that stopped answering is not hammered.
 NATIVE_BACKOFF_INTERVAL: Final = 30

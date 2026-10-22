@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,6 +17,7 @@ from custom_components.inim_prime.binary_sensor import (
     InimAreaAlarmMemoryBinarySensor,
     InimFaultBinarySensor,
     InimFaultFlagBinarySensor,
+    InimPanelModeBinarySensor,
     InimZoneBinarySensor,
 )
 from custom_components.inim_prime.client import (
@@ -26,6 +28,8 @@ from custom_components.inim_prime.client import (
     Local6004Config,
     Local6004Structure,
     NativeZoneStatus,
+    PanelStatus,
+    Power,
     Scenario,
     Version,
     Zone,
@@ -61,7 +65,7 @@ def _area(area_id: int, label: str, *, alarm_memory: bool) -> Area:
 def inim_data() -> InimData:
     """Return a sample InimData."""
     return InimData(
-        version=Version(raw="4.07 PX500", service=False),
+        version=Version(raw="4.07 PX500"),
         areas=[
             _area(1, "Ground", alarm_memory=True),
             _area(2, "Upstairs", alarm_memory=False),
@@ -79,6 +83,8 @@ def inim_data() -> InimData:
         ],
         outputs=[],
         fault=Fault(vcc=13.7, has_faults=False),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
 
 
@@ -209,6 +215,8 @@ def test_fault_binary_sensor(coordinator: SimpleNamespace) -> None:
         scenarios=[],
         outputs=[],
         fault=Fault(vcc=11.2, has_faults=True),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     assert fault.is_on is True
     assert fault.extra_state_attributes == {"vcc": 11.2}
@@ -239,6 +247,8 @@ def test_area_alarm_memory_enabled_default(inim_data: InimData) -> None:
         scenarios=[],
         outputs=[],
         fault=inim_data.fault,
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     coordinator = SimpleNamespace(
         data=data, config_entry=entry, local_config=_local_config(), last_update_success=True
@@ -272,8 +282,46 @@ def test_fault_flag_binary_sensor(coordinator: SimpleNamespace) -> None:
         scenarios=coordinator.data.scenarios,
         outputs=[],
         fault=Fault(vcc=11.2, has_faults=True, flags={"low_battery": True}),
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     assert sensor.is_on is True
+
+
+def test_tamper_sensor_names_the_source(coordinator: SimpleNamespace) -> None:
+    """Only the tamper sensor carries which device reports the tamper."""
+    sources = {"panel_open": False, "readers": True}
+    coordinator.data = replace(
+        coordinator.data,
+        fault=Fault(vcc=13.7, has_faults=True, tamper_sources=sources),
+    )
+    assert InimFaultFlagBinarySensor(coordinator, "tamper").extra_state_attributes == sources
+    assert InimFaultFlagBinarySensor(coordinator, "low_battery").extra_state_attributes is None
+
+
+@pytest.mark.parametrize(
+    ("key", "translation_key", "panel", "expected"),
+    [
+        ("service", "service_mode", PanelStatus(service=True, programming=False), True),
+        ("service", "service_mode", PanelStatus(service=False, programming=True), False),
+        ("programming", "programming_mode", PanelStatus(service=False, programming=True), True),
+        ("programming", "programming_mode", PanelStatus(service=True, programming=False), False),
+    ],
+)
+def test_panel_mode_binary_sensor(
+    coordinator: SimpleNamespace,
+    key: str,
+    translation_key: str,
+    panel: PanelStatus,
+    expected: bool,
+) -> None:
+    """The service and programming sensors follow the panel status, as diagnostics."""
+    coordinator.data = replace(coordinator.data, panel=panel)
+    sensor = InimPanelModeBinarySensor(coordinator, key)
+    assert sensor.unique_id == f"abc123_{translation_key}"
+    assert sensor.translation_key == translation_key
+    assert sensor.entity_category is EntityCategory.DIAGNOSTIC
+    assert sensor.is_on is expected
 
 
 def test_zone_missing_from_the_data(coordinator: SimpleNamespace) -> None:
@@ -297,6 +345,8 @@ def test_area_alarm_memory_missing_area(coordinator: SimpleNamespace) -> None:
         scenarios=coordinator.data.scenarios,
         outputs=[],
         fault=coordinator.data.fault,
+        power=Power(battery_voltage=13.4),
+        panel=PanelStatus(service=False, programming=False),
     )
     assert sensor.available is False
     assert sensor.is_on is None

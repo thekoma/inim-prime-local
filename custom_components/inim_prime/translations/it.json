@@ -72,6 +72,18 @@
       },
       "open_zone_count": {
         "name": "Zone aperte"
+      },
+      "battery_voltage": {
+        "name": "Tensione batteria"
+      },
+      "battery_temperature": {
+        "name": "Temperatura batteria"
+      },
+      "battery_resistance": {
+        "name": "Resistenza interna batteria"
+      },
+      "gsm_signal": {
+        "name": "Segnale GSM"
       }
     },
     "binary_sensor": {
@@ -122,6 +134,12 @@
       },
       "shutter": {
         "name": "Tapparella"
+      },
+      "service_mode": {
+        "name": "Modalità servizio"
+      },
+      "programming_mode": {
+        "name": "Modalità programmazione"
       }
     },
     "switch": {

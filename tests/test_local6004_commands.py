@@ -135,7 +135,7 @@ def test_read_guard(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_allow_lists_are_disjoint_and_exact() -> None:
     assert frozenset({3, 8, 9, 16}) == m._WRITE_OPS
-    assert frozenset({6, 7, 0x0D}) == m._STATUS_OPS
+    assert frozenset({6, 7, 0x0D, 0x31, 0x5E}) == m._STATUS_OPS
     assert frozenset({0x10, 0x11}) == m._READ_OPS
     # Memory-read opcodes are a byte inside a read body, a different namespace
     # from the 4-byte command opcode (0x10 read-continue vs op 16 reset), so

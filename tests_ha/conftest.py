@@ -24,7 +24,9 @@ from custom_components.inim_prime.client import (  # noqa: E402
     Local6004Config,
     Local6004Structure,
     NativeAreaStatus,
+    NativeGsmStatus,
     NativeObject,
+    NativePowerValues,
     NativeSystemStatus,
     NativeZoneDef,
     NativeZoneStatus,
@@ -62,7 +64,12 @@ def mock_config_entry(entry_data: dict) -> MockConfigEntry:
 
 
 def system_status(
-    *, supply: float = 13.7, service: bool = False, **faults: bool
+    *,
+    supply: float = 13.7,
+    service: bool = False,
+    programming: bool = False,
+    tamper_sources: dict[str, bool] | None = None,
+    **faults: bool,
 ) -> NativeSystemStatus:
     """Build a system status with the given fault flags set (others clear)."""
     flags = {key: faults.get(key, False) for key in FAULT_FLAG_KEYS}
@@ -72,8 +79,9 @@ def system_status(
         supply_voltage=supply,
         battery_voltage=13.4,
         service=service,
-        programming=False,
+        programming=programming,
         raw=bytes(12),
+        tamper_sources=tamper_sources or {},
     )
 
 
@@ -133,6 +141,16 @@ def mock_local_client(
     local.async_get_zone_statuses.return_value = zone_statuses
     local.async_get_output_states.return_value = {1: 0}
     local.async_get_system_status.return_value = system_status()
+    local.async_get_power_values.return_value = NativePowerValues(
+        battery_temperature=27, battery_resistance=115
+    )
+    local.async_get_gsm_status.return_value = NativeGsmStatus(
+        result=0,
+        faults={},
+        networks=("2G", "3G", "4G"),
+        signal=67,
+        operator_code="00101",
+    )
     local.supports_native_writes = True
     return local
 
