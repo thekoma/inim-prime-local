@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -192,6 +193,7 @@ def _terminal_frames(terminals: dict[int, int]) -> list[bytes]:
 def _label_frames(
     zones: dict[int, tuple[str, int]],
     spans: list[tuple[int, int]],
+    kinds: bool = True,
 ) -> list[bytes]:
     """Script the label session: ack, labels, then labels + settings per span."""
     areas = b"".join(
@@ -209,8 +211,26 @@ def _label_frames(
         for zid in range(first, last + 1):
             label, mask = zones.get(zid, ("", 0))
             labels += label.encode("latin-1").ljust(16, b"\x00")
-            settings += mask.to_bytes(4, "little") + bytes(m._ZONE_CFG_REC - 4)
+            zone_type, options, options1, pulses = _ZONE_EXTRA.get(zid, (0, 0, 0, 1))
+            settings += (
+                mask.to_bytes(4, "little")
+                + bytes([zone_type, options, options1])
+                + bytes(3)
+                + bytes([pulses])
+            )
         frames += [_resp(bytes(labels)), _resp(bytes(settings))]
+    if spans and kinds:
+        # Zone-kind reads: the third option byte per span, then the settings and
+        # detector types of the zones' terminals.
+        frames += [
+            _resp(bytes(_ZONE_OPT2.get(z, 0) for z in range(first, last + 1)))
+            for first, last in spans
+        ]
+        terminals = range(
+            min(first % 1005 for first, _ in spans), max(last % 1005 for _, last in spans) + 1
+        )
+        frames.append(_resp(b"".join(_TERMINAL_CFG.get(t, bytes(12)) for t in terminals)))
+        frames.append(_resp(b"".join(_PULSE_CFG.get(t, bytes(28)) for t in terminals)))
     return frames
 
 
@@ -227,6 +247,17 @@ _ZONES = {
     1010: ("Hall B", 0x04),
 }
 _SPANS = [(0, 5), (1005, 1010)]
+# Zone settings bytes 4, 5, 6 and 10 (type, options, options1, pulses).
+_ZONE_EXTRA = {1: (0, 0x02, 0, 1), 5: (0, 0x01, 0x40, 1), 1005: (1, 0, 0, 1), 1010: (0, 0, 0, 5)}
+# The third option byte per zone (0x04 = fire).
+_ZONE_OPT2 = {1: 0x04}
+# Detector type (byte 10): terminal 5 is a roller shutter.
+_PULSE_CFG = {5: bytes(10) + bytes([1]) + bytes(17)}
+# Terminal settings: thresholds, balance (byte 5), levels (6-8), type (11).
+_TERMINAL_CFG = {
+    0: bytes([16, 56, 91, 125, 180, 4, 0, 0, 0, 0, 0, 3]),
+    5: bytes([16, 56, 91, 125, 180, 1, 0x92, 0x12, 0x12, 0, 0, 3]),
+}
 
 
 def _config_sessions() -> list[list[bytes]]:
@@ -268,6 +299,10 @@ async def test_async_read_config_success(monkeypatch: pytest.MonkeyPatch) -> Non
         (0x14073414, 6 * 11),
         (0x14030F00 + 1005 * 16, 6 * 16),
         (0x14073414 + 1005 * 11, 6 * 11),
+        (0x1406F8A0, 6),
+        (0x1406F8A0 + 1005, 6),
+        (0x140704F8, 6 * 12),
+        (0x14100A10, 6 * 28),
     ]
     assert [(_decrypt(f), f[4:6]) for f in label_sent] == [(m._OPEN_CFG, b"\x01\x00")] + [
         (m._read_cmd(addr, n, cont=False), b"\x00\x00") for addr, n in reads
@@ -282,13 +317,28 @@ async def test_async_read_config_success(monkeypatch: pytest.MonkeyPatch) -> Non
     assert st is not None
     assert st.areas == [m.NativeObject(0, "Home"), m.NativeObject(2, "Garage")]
     # terminal order, half A before half B; zone 2 (no partition) is dropped
+    door_terminal = {"balance": 4, "levels": (0, 0, 0), "terminal_type": 3}
+    hall_terminal = {"balance": 1, "levels": (0x92, 0x12, 0x12), "terminal_type": 3}
+    plain_terminal = {"balance": 0, "levels": (0, 0, 0), "terminal_type": 0}
+    def zone(zid, label, terminal, areas, zone_type, options, options1, pulses, opt2, term, sensor):  # noqa: ANN001, ANN202, PLR0913
+        return m.NativeZoneDef(
+            zid, label, terminal, areas, zone_type=zone_type, options=options, options1=options1,
+            pulses=pulses, options2=opt2, sensor=sensor, **term,
+        )
+
     assert st.zones == [
-        m.NativeZoneDef(0, "Door", 0, (0,)),
-        m.NativeZoneDef(1005, "Door B", 0, (0,)),
-        m.NativeZoneDef(1, "Window", 1, (1, 2)),
-        m.NativeZoneDef(5, "Hall", 5, (29,)),
-        m.NativeZoneDef(1010, "Hall B", 5, (2,)),
+        zone(0, "Door", 0, (0,), 0, 0, 0, 1, 0, door_terminal, 0),
+        zone(1005, "Door B", 0, (0,), 1, 0, 0, 1, 0, door_terminal, 0),
+        zone(1, "Window", 1, (1, 2), 0, 0x02, 0, 1, 0x04, plain_terminal, 0),
+        zone(5, "Hall", 5, (29,), 0, 0x01, 0x40, 1, 0, hall_terminal, 1),
+        zone(1010, "Hall B", 5, (2,), 0, 0, 0, 5, 0, hall_terminal, 1),
     ]
+    # The named zone kinds (Prime/STUDIO names) read from those bytes.
+    door_b, window, hall = st.zones[1], st.zones[2], st.zones[3]
+    assert door_b.is_delayed and not door_b.is_24h
+    assert window.is_fire and not window.is_interior
+    assert hall.is_shutter and hall.is_interior and hall.is_fault_zone
+    assert not hall.is_shock and not hall.is_hold_up and not hall.has_chime
     # "Scenario 2" is scenario 1's default; "Scenario 9" on scenario 2 is not
     assert st.scenarios == [m.NativeObject(0, "Away"), m.NativeObject(2, "Scenario 9")]
     assert st.outputs == [m.NativeObject(1005, "Siren"), m.NativeObject(1007, "Box")]
@@ -333,7 +383,37 @@ def test_short_zone_settings_drop_the_zone() -> None:
     labels = b"Door".ljust(16, b"\x00") + b"Window".ljust(16, b"\x00")
     settings = (1).to_bytes(4, "little") + bytes(7)  # zone 1's record missing
     zones = m._decode_zones([0, 1], [(0, 1)], [labels, settings])
+    assert zones == [
+        m.NativeZoneDef(0, "Door", 0, (0,), zone_type=0, options=0, options1=0, pulses=0)
+    ]
+
+
+def test_partial_settings_and_kind_records_leave_the_kind_unknown() -> None:
+    """A truncated zone record or kind read keeps the areas but no raw kind fields."""
+    labels = b"Door".ljust(16, b"\x00")
+    settings = (1).to_bytes(4, "little") + bytes(2)  # mask only, record cut short
+    kinds = {"terminal": (0, bytes(5)), "pulse": (0, bytes(3)), "opt2_0": (0, b"")}
+    zones = m._decode_zones([0], [(0, 0)], [labels, settings], 1005, kinds)
     assert zones == [m.NativeZoneDef(0, "Door", 0, (0,))]
+
+
+async def test_layout_without_kind_tables_reads_no_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A layout with the zone-kind offsets unmapped still reads the zones."""
+    bare = replace(m._LAYOUT_40X, terminal_cfg=None, pulse_cfg=None, zone_opt2=None)
+    monkeypatch.setitem(m._LAYOUTS, "4", bare)
+    _patch_sessions(
+        monkeypatch,
+        [
+            *_config_sessions(),
+            _partition_frames(),
+            _terminal_frames(_TERMINALS),
+            _label_frames(_ZONES, _SPANS, kinds=False),
+        ],
+    )
+    cfg = await m.Local6004Client("host", "pass").async_read_config()
+    assert cfg.structure is not None and cfg.structure.zones is not None
+    door = cfg.structure.zones[0]
+    assert (door.id, door.zone_type, door.balance, door.sensor, door.options2) == (0, 0, None, None, None)
 
 
 _SHORT = _resp(bytes(m._STATUS_HEADER))

@@ -38,6 +38,9 @@ SCHEMA_VERSION = "1"
 # --- integration-facing aliases ---------------------------------------------
 CONFIG_ALIASES = {                      # friendly name -> getValue symbol
     "zone_cfg":      "spring_exf_prg_zones",
+    "terminal_cfg":  "spring_exf_prg_terminals",
+    "pulse_cfg":     "spring_exf_pulse_settings",
+    "zone_opt2":     "spring_exf_opt_zone_1",
     "scenario_modi": "spring_exf_prg_scenari",
     # event log read via the low-address path (op 0x1f). Matches the repo's
     # _LOG_ADDR 0xA1D0 on 4.00 exactly. 5.00 = 0x104A8, same 0x1f path.
@@ -51,9 +54,14 @@ LABEL_ALIASES = {                       # friendly name -> MemoryCopy field
     "output_labels":   "AddressUSCITE",
 }
 # record sizes (protocol constants) + 2-byte CRC trailer, for count recovery
-RECORD = {"zone_cfg": 11, "scenario_modi": 19}
+RECORD = {"zone_cfg": 11, "terminal_cfg": 12, "pulse_cfg": 28, "zone_opt2": 1,
+          "scenario_modi": 19}
 BLOB = {"log_addr"}                      # length-only (no fixed record size)
 CRC_TRAILER = 2
+# Tables packed without the CRC trailer: their span is an exact record multiple
+# (terminal_cfg = 1005 x 12 on 4.00, 1505 x 12 on 5.00; pulse_cfg = 1010 x 28
+# and 1510 x 28, one record per terminal including the outputs).
+NO_TRAILER = {"terminal_cfg", "pulse_cfg"}
 # region high-byte -> panel context opcode used to read it (from the integration).
 # 0x14 = external-flash/config region (_OPEN_CFG 0x17); 0x00 = low EEPROM (_OPEN_LOG 0x1f).
 REGION_OP = {0x14: 0x17, 0x00: 0x1f}
@@ -220,9 +228,10 @@ def extract(path):
                 if friendly in RECORD and nxt is not None:   # record table -> count
                     span = nxt - addr
                     rec = RECORD[friendly]
+                    trailer = 0 if friendly in NO_TRAILER else CRC_TRAILER
                     entry.update(record_size=rec, span_bytes=span,
-                                 count=(span - CRC_TRAILER) // rec,
-                                 count_source=f"derived: (span-2)//{rec}, next={_family(sym)}* field")
+                                 count=(span - trailer) // rec,
+                                 count_source=f"derived: (span-{trailer})//{rec}, next={_family(sym)}* field")
                 elif friendly in BLOB and nxt is not None:    # blob -> length only
                     entry.update(length_bytes=nxt - addr,
                                  length_source=f"derived: span to next {_family(sym)}* field")

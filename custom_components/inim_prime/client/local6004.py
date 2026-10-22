@@ -229,6 +229,17 @@ _SCENARIO_COUNT = 50
 _ZONE_CFG_ADDR = 0x14073414
 _ZONE_CFG_REC = 11
 _ZONE_MASK_LEN = 4
+# Terminal settings (getValue["spring_exf_prg_terminals"]): one 12-byte record
+# per zone terminal, half_offset records, no CRC trailer.
+_TERMINAL_CFG_ADDR = 0x140704F8
+_TERMINAL_CFG_REC = 12
+# Detector type per terminal (getValue["spring_exf_pulse_settings"]): one 28-byte
+# record per terminal, outputs included, no CRC trailer; the type is byte 10.
+_PULSE_CFG_ADDR = 0x14100A10
+_PULSE_CFG_REC = 28
+_PULSE_SENSOR = 10
+# A third option byte per zone (getValue["spring_exf_opt_zone_1"]).
+_ZONE_OPT2_ADDR = 0x1406F8A0
 _LABEL_REC = 16
 _AREA_LABELS_ADDR = 0x14030D20
 _ZONE_LABELS_ADDR = 0x14030F00
@@ -242,9 +253,10 @@ class _Layout:
 
     The live status/command opcodes and the version read are identical across
     families; only the EEPROM offsets, the half-B zone id offset and the
-    output-terminal range differ. ``zone_cfg`` / ``log_addr`` are ``None`` when
-    that table's offset is not mapped for the family yet: the zone->area map and
-    the event log are then unavailable, while the rest of the native channel
+    output-terminal range differ. ``zone_cfg``, the zone-kind tables
+    (``terminal_cfg``, ``pulse_cfg``, ``zone_opt2``) and ``log_addr`` are ``None``
+    when that table's offset is not mapped for the family yet: the zone->area
+    map, the zone kinds and the event log are then unavailable, while the rest of the native channel
     (live area/zone status, scenes, labels) still works. ``native_writes_ok`` is
     False for a family whose write-command responses have not been verified on a
     live panel; the integration then keeps commands on the cgi for that family.
@@ -259,6 +271,9 @@ class _Layout:
     half_offset: int
     terminal_count: int
     zone_cfg: int | None
+    terminal_cfg: int | None
+    pulse_cfg: int | None
+    zone_opt2: int | None
     log_addr: int | None
     native_writes_ok: bool
 
@@ -277,6 +292,9 @@ _LAYOUT_40X = _Layout(
     half_offset=1005,
     terminal_count=1010,
     zone_cfg=_ZONE_CFG_ADDR,
+    terminal_cfg=_TERMINAL_CFG_ADDR,
+    pulse_cfg=_PULSE_CFG_ADDR,
+    zone_opt2=_ZONE_OPT2_ADDR,
     log_addr=_LOG_ADDR,
     native_writes_ok=True,
 )
@@ -291,7 +309,9 @@ _LAYOUT_40X = _Layout(
 # tests/test_offset_provenance.py, which pins each offset to that DLL-attested
 # value. The zone_cfg record is still 11 bytes; only the zone count grew with the
 # terminal count (0x1408B920 live-verified on 5.00: 20/20 zones, correct area
-# membership). The 5.x event-log offset is known (spring_eep_logger_ev = 0x104A8)
+# membership). terminal_cfg = getValue["spring_exf_prg_terminals"] = 0x14087294,
+# pulse_cfg = getValue["spring_exf_pulse_settings"] = 0x1413C068 and zone_opt2 =
+# getValue["spring_exf_opt_zone_1"] = 0x14086060 (all live-verified on 5.00). The 5.x event-log offset is known (spring_eep_logger_ev = 0x104A8)
 # but log_addr stays None until the 5.x log decode is verified live.
 _LAYOUT_50X = _Layout(
     name="50x",
@@ -303,6 +323,9 @@ _LAYOUT_50X = _Layout(
     half_offset=1505,
     terminal_count=1510,
     zone_cfg=0x1408B920,
+    terminal_cfg=0x14087294,
+    pulse_cfg=0x1413C068,
+    zone_opt2=0x14086060,
     log_addr=None,
     # Native writes verified live on 5.00 (2026-10-19): single arm/disarm ops
     # answer in ~0.03 s with the same echo as 4.07 and do not lock the panel.
@@ -699,6 +722,23 @@ class NativeObject:
     label: str
 
 
+# Zone-kind codes, named as Prime/STUDIO shows them (Centrale5.dll:
+# Living_Zone::GetTipoZona and GetTappIn, Living_ConfiguraTerminali::
+# StructToFormZona; the same on 4.x and 5.x).
+ZONE_TYPE_DELAYED = 1  # "Ritardata"
+ZONE_TYPE_DELAYED_SHOWN = 2  # "Ritardata visualizzabile"
+ZONE_TYPE_24H = 4  # "24 Ore"
+ZONE_OPT_INTERIOR = 0x01  # "Interna"
+ZONE_OPT_AUTO_BYPASS = 0x02  # "Autoescludibile": bypassed by itself when open at arming
+ZONE_OPT_UNBYPASSABLE = 0x04  # "Non escludibile"
+ZONE_OPT_CHIME = 0x08  # "Campanello"
+ZONE_OPT1_HOLD_UP = 0x20  # "Rapina"
+ZONE_OPT1_FAULT = 0x40  # "Zona guasto"
+ZONE_OPT2_FIRE = 0x04  # "Incendio"
+SENSOR_SHUTTER = 1  # "Tapparella"
+SENSOR_SHOCK = 2  # "Inerziale"
+
+
 @dataclass(frozen=True)
 class NativeZoneDef:
     """A zone that exists on the panel, with its label and partitions.
@@ -711,34 +751,124 @@ class NativeZoneDef:
     label: str
     terminal: int
     areas: tuple[int, ...]
+    # Raw settings, None when not read: zone_cfg bytes 4 (zone type), 5 and 6
+    # (options, options1) and 10 (pulses); the zone's zone_opt2 byte; the
+    # terminal's terminal_cfg bytes 5 (balance), 6-8 (levels) and 11 (terminal
+    # type), and its pulse_cfg detector type.
+    zone_type: int | None = None
+    options: int | None = None
+    options1: int | None = None
+    pulses: int | None = None
+    options2: int | None = None
+    balance: int | None = None
+    levels: tuple[int, int, int] | None = None
+    terminal_type: int | None = None
+    sensor: int | None = None
+
+    @property
+    def is_shutter(self) -> bool:
+        """Roller-shutter detector ("Tapparella")."""
+        return self.sensor == SENSOR_SHUTTER
+
+    @property
+    def is_shock(self) -> bool:
+        """Shock / inertial detector ("Inerziale")."""
+        return self.sensor == SENSOR_SHOCK
+
+    @property
+    def is_fire(self) -> bool:
+        """Fire zone ("Incendio")."""
+        return bool((self.options2 or 0) & ZONE_OPT2_FIRE)
+
+    @property
+    def is_24h(self) -> bool:
+        """24-hour zone ("24 Ore"), active whatever the arming state."""
+        return self.zone_type == ZONE_TYPE_24H
+
+    @property
+    def is_delayed(self) -> bool:
+        """Zone with an entry delay ("Ritardata" / "Ritardata visualizzabile")."""
+        return self.zone_type in (ZONE_TYPE_DELAYED, ZONE_TYPE_DELAYED_SHOWN)
+
+    @property
+    def is_interior(self) -> bool:
+        """Interior zone ("Interna"), left out of partial arming."""
+        return bool((self.options or 0) & ZONE_OPT_INTERIOR)
+
+    @property
+    def has_chime(self) -> bool:
+        """Chime zone ("Campanello")."""
+        return bool((self.options or 0) & ZONE_OPT_CHIME)
+
+    @property
+    def is_hold_up(self) -> bool:
+        """Hold-up zone ("Rapina")."""
+        return bool((self.options1 or 0) & ZONE_OPT1_HOLD_UP)
+
+    @property
+    def is_fault_zone(self) -> bool:
+        """Fault zone ("Zona guasto")."""
+        return bool((self.options1 or 0) & ZONE_OPT1_FAULT)
+
+
+def _record(kinds: Mapping[str, tuple[int, bytes]], name: str, index: int, size: int) -> bytes | None:
+    """Return record ``index`` of the ``name`` kind read, or None if not read."""
+    entry = kinds.get(name)
+    if entry is None:
+        return None
+    first, blob = entry
+    rec = blob[(index - first) * size : (index - first + 1) * size]
+    return rec if len(rec) == size else None
 
 
 def _decode_zones(
-    candidates: list[int], spans: list[tuple[int, int]], blobs: list[bytes]
+    candidates: list[int],
+    spans: list[tuple[int, int]],
+    blobs: list[bytes],
+    half_offset: int = SECOND_HALF_ZONE_OFFSET,
+    kinds: Mapping[str, tuple[int, bytes]] | None = None,
 ) -> list[NativeZoneDef]:
     """Build the zones that exist from the label/settings reads of each span.
 
     ``blobs`` holds ``[labels, settings]`` per span, in span order. A candidate
     zone with an empty partition bitmask is not in use and is dropped.
+    ``kinds`` maps each zone-kind read that was made (``opt2_<span index>``,
+    ``terminal``, ``pulse``) to ``(first zone or terminal, data)``.
     """
+    kinds = kinds or {}
     zones: list[NativeZoneDef] = []
-    for (first, last), labels, settings in zip(spans, blobs[0::2], blobs[1::2], strict=True):
+    for span, ((first, last), labels, settings) in enumerate(
+        zip(spans, blobs[0::2], blobs[1::2], strict=True)
+    ):
         for zid in candidates:
             if not first <= zid <= last:
                 continue
             idx = zid - first
-            off = idx * _ZONE_CFG_REC
-            mask = int.from_bytes(settings[off : off + _ZONE_MASK_LEN], "little")
+            rec = settings[idx * _ZONE_CFG_REC : (idx + 1) * _ZONE_CFG_REC]
+            mask = int.from_bytes(rec[:_ZONE_MASK_LEN], "little")
             areas = tuple(b for b in range(_PARTITION_COUNT) if mask & (1 << b))
-            if areas:
-                zones.append(
-                    NativeZoneDef(
-                        id=zid,
-                        label=_label_at(labels, idx),
-                        terminal=zone_terminal(zid)[0],
-                        areas=areas,
-                    )
+            if not areas:
+                continue
+            terminal = zone_terminal(zid, half_offset)[0]
+            zone = NativeZoneDef(
+                id=zid, label=_label_at(labels, idx), terminal=terminal, areas=areas
+            )
+            if len(rec) == _ZONE_CFG_REC:
+                zone = replace(
+                    zone, zone_type=rec[4], options=rec[5], options1=rec[6], pulses=rec[10]
                 )
+            if (opt2 := _record(kinds, f"opt2_{span}", zid, 1)) is not None:
+                zone = replace(zone, options2=opt2[0])
+            if (trec := _record(kinds, "terminal", terminal, _TERMINAL_CFG_REC)) is not None:
+                zone = replace(
+                    zone,
+                    balance=trec[5],
+                    levels=(trec[6], trec[7], trec[8]),
+                    terminal_type=trec[11],
+                )
+            if (prec := _record(kinds, "pulse", terminal, _PULSE_CFG_REC)) is not None:
+                zone = replace(zone, sensor=prec[_PULSE_SENSOR])
+            zones.append(zone)
     # Back to the cgi's order (terminal, then half).
     order = {zid: pos for pos, zid in enumerate(candidates)}
     return sorted(zones, key=lambda z: order[z.id])
@@ -1228,10 +1358,36 @@ class Local6004Client:
                 count = last - first + 1
                 reads.append((layout.zone_labels + first * _LABEL_REC, count * _LABEL_REC))
                 reads.append((zone_cfg + first * _ZONE_CFG_REC, count * _ZONE_CFG_REC))
+        # Zone-kind inputs (see NativeZoneDef): each zone's third option byte, per
+        # span, and the settings and detector type of the terminals holding the
+        # zones, one contiguous read each. A table whose offset is not mapped is
+        # skipped and its fields stay None.
+        kind_reads: dict[str, tuple[int, int, int]] = {}  # name -> (first, addr, length)
+        if layout.zone_opt2 is not None:
+            for span, (first, last) in enumerate(spans):
+                kind_reads[f"opt2_{span}"] = (first, layout.zone_opt2 + first, last - first + 1)
+        zone_terminals = sorted({zone_terminal(z, layout.half_offset)[0] for z in candidates})
+        if zone_terminals:
+            first_t = zone_terminals[0]
+            count_t = zone_terminals[-1] - first_t + 1
+            for name, base, size in (
+                ("terminal", layout.terminal_cfg, _TERMINAL_CFG_REC),
+                ("pulse", layout.pulse_cfg, _PULSE_CFG_REC),
+            ):
+                if base is not None:
+                    kind_reads[name] = (first_t, base + first_t * size, count_t * size)
+        reads += [(addr, length) for _, addr, length in kind_reads.values()]
         blobs = await self._best_effort(self._session(_OPEN_CFG, reads))
         if blobs is None:
             return Local6004Structure()
-        area_labels, scenario_labels, output_labels, *zone_blobs = blobs
+        area_labels, scenario_labels, output_labels, *rest = blobs
+        zone_blobs = rest[: len(rest) - len(kind_reads)]
+        kinds = {
+            name: (first, blob)
+            for (name, (first, _, _)), blob in zip(
+                kind_reads.items(), rest[len(zone_blobs) :], strict=True
+            )
+        }
 
         scenarios = [
             NativeObject(id=sid, label=_label_at(scenario_labels, sid))
@@ -1244,7 +1400,7 @@ class Local6004Client:
                 else [NativeObject(id=a, label=_label_at(area_labels, a)) for a in area_ids]
             ),
             zones=(
-                _decode_zones(candidates, spans, zone_blobs)
+                _decode_zones(candidates, spans, zone_blobs, layout.half_offset, kinds)
                 if terminal_types is not None and decode_zones
                 else None
             ),

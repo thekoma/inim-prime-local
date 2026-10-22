@@ -23,7 +23,7 @@ from .device import (
     room_device_info,
 )
 from .room_guess import guess_room
-from .zone_guess import guess_device_class
+from .zone_kind import native_zone, zone_device_class
 
 # Read-only platform: all state comes from the coordinator, no panel writes,
 # so updates need not be serialized.
@@ -109,8 +109,11 @@ class InimZoneBinarySensor(InimBaseBinarySensor):
         self._last_label = zone.label if zone is not None else None
         if zone is not None:
             language = label_language(coordinator)
-            # Device class -> a state-aware icon, guessed from the initial label.
-            self._attr_device_class = guess_device_class(zone.label, language)
+            # Device class -> a state-aware icon: from the panel configuration
+            # where it is explicit, else guessed from the initial label.
+            self._attr_device_class = zone_device_class(
+                native_zone(coordinator, zone_id), zone.label, language
+            )
             # Group the zone under a per-room device when enabled and a room is
             # recognised in the label; otherwise it stays on the panel device.
             if group_zones_by_room(coordinator):

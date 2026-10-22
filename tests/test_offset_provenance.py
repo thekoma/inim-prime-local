@@ -25,6 +25,9 @@ _MAJOR_TO_FW = {"4": "4.00", "5": "5.00"}
 # _Layout address fields the extractor recovers, each named like the JSON field.
 _ADDR_FIELDS = (
     "zone_cfg",
+    "terminal_cfg",
+    "pulse_cfg",
+    "zone_opt2",
     "scenario_modi",
     "area_labels",
     "zone_labels",
@@ -34,6 +37,9 @@ _ADDR_FIELDS = (
 )
 _CONFIG_FIELDS = (
     "zone_cfg",
+    "terminal_cfg",
+    "pulse_cfg",
+    "zone_opt2",
     "scenario_modi",
     "area_labels",
     "zone_labels",
@@ -74,6 +80,11 @@ def test_record_counts_match_dll(major: str) -> None:
     layout = m._LAYOUTS[major]
     assert fields["zone_cfg"]["record_size"] == m._ZONE_CFG_REC
     assert fields["zone_cfg"]["count"] == 2 * layout.half_offset
+    assert fields["terminal_cfg"]["record_size"] == m._TERMINAL_CFG_REC
+    assert fields["terminal_cfg"]["count"] == layout.half_offset
+    assert fields["pulse_cfg"]["record_size"] == m._PULSE_CFG_REC
+    assert fields["pulse_cfg"]["count"] == layout.terminal_count
+    assert fields["zone_opt2"]["count"] == 2 * layout.half_offset
     assert fields["scenario_modi"]["record_size"] == m._SCENARIO_MODI_REC
     assert fields["scenario_modi"]["count"] == m._SCENARIO_COUNT
 
