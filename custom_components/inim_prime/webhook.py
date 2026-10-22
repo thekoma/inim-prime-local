@@ -4,8 +4,8 @@ The panel's generic outbound HTTP client POSTs (or GETs) to a Home Assistant
 local webhook on each configured event. The handler validates the request,
 applies an idempotent optimistic patch to the coordinator's cached
 ``InimData`` snapshot, and notifies entities instantly via
-``async_set_updated_data``. It then kicks a coordinator refresh as a
-reconciliation backstop and never returns an error to the panel.
+``async_set_updated_data``. The next scheduled poll reconciles the patch with
+the panel's own state. It never returns an error to the panel.
 
 Security model (design doc §2.5): the cleartext-LAN URL embeds a per-entry
 secret as the webhook id, which is the bearer token. Unknown ids are routed by
@@ -90,14 +90,8 @@ async def _process(entry: InimConfigEntry, request: web.Request) -> None:
     patched = coordinator.apply_event(ev, **_event_params(params))
     if patched is not None:
         coordinator.async_set_updated_data(patched)
-
-    # Enter the fast poll tier so the panel is reconciled at the active cadence.
-    # We deliberately do NOT request an immediate refresh: on a real panel the
-    # poll lags the event (the whole reason for the optimistic push), so an
-    # immediate re-read would re-fetch pre-event state and clobber the
-    # optimistic patch within seconds, producing a visible flap. The scheduled
-    # fast-tier poll reconciles once the panel has caught up.
-    coordinator.activate_fast_poll()
+    # The next native poll (every few seconds) reconciles the patch with the
+    # panel's own state.
 
 
 async def _read_params(request: web.Request) -> dict[str, str]:

@@ -1,6 +1,6 @@
 # Realtime notifications (fully local)
 
-Polling alone already gives near-realtime updates (~1 s in the active window — see [polling-and-tuning.md](polling-and-tuning.md)). For **instant** updates you can have the panel *push* events to Home Assistant, with **no cloud** involved. Two local paths are available.
+Polling alone already gives near-realtime updates (every 2 s — see [polling-and-tuning.md](polling-and-tuning.md)). For **instant** updates you can have the panel *push* events to Home Assistant, with **no cloud** involved. Two local paths are available.
 
 ## Option A — Panel HTTP event-push → HA webhook (built in)
 
@@ -32,7 +32,7 @@ The panel sends the URL/body **verbatim** — there are no macros and no "all ob
 You can also send the parameters as a form **body** (POST). The handler always returns HTTP `200` and ignores unknown/invalid calls without disturbing state.
 
 ### 3. Spend the ~50 event-action slots wisely
-Panels have a limited number of slots (e.g. Prime120 ≈ 50). Prioritise: **arm/disarm + alarm + tamper + faults + perimeter zones** on push; leave interior zones and diagnostics on the (already fast) adaptive poll.
+Panels have a limited number of slots (e.g. Prime120 ≈ 50). Prioritise: **arm/disarm + alarm + tamper + faults + perimeter zones** on push; leave interior zones and diagnostics on the (already fast) 2 s poll.
 
 > **Why not the INIM cloud websocket?** It works, but it routes your alarm's realtime path through INIM's cloud. This integration is local-first by design and does not use it.
 
@@ -40,6 +40,6 @@ Panels have a limited number of slots (e.g. Prime120 ≈ 50). Prioritise: **arm/
 
 INIM panels can report events using the **SIA-DC09** central-station protocol. Home Assistant has a built-in [`sia`](https://www.home-assistant.io/integrations/sia/) integration that listens for these reports — a second, fully-local, sub-second realtime path that works independently of this integration. Configure the panel's SIA-IP reporting to point at Home Assistant's SIA listener. Use this if the HTTP event-push table is inconvenient or already in use.
 
-## Fallback — adaptive polling
+## Fallback — polling
 
-If you configure no push at all, the integration still tracks changes through its two-tier adaptive poll (idle/active). It's the zero-setup option and remains the reconciliation layer even when push is enabled.
+If you configure no push at all, the integration still tracks changes through its 2 s native poll. It's the zero-setup option and remains the reconciliation layer even when push is enabled.

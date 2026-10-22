@@ -1,9 +1,8 @@
-"""Tests for the opt-in native write commands and their cgi fallback rules."""
+"""Tests for the panel write commands (native TCP 6004 only)."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -17,474 +16,442 @@ from custom_components.inim_prime.client import (
     SCENE_DECODED_PARTITIONS,
     AreaMode,
     ArmMode,
-    InimConnectionError,
     Local6004Config,
     Local6004Error,
     NativeCommandInvalid,
     NativeCommandNotSent,
     NativeCommandRejected,
     NativeCommandUncertain,
+    NativeZoneDef,
     NativeZonesNotReady,
     NativeZoneStatus,
     SceneDef,
     ZoneState,
     local6004,
 )
-from custom_components.inim_prime.const import (
-    CONF_NATIVE_AREA_POLL,
-    CONF_NATIVE_COMMANDS,
+from custom_components.inim_prime.client.local6004 import (
+    ZONE_OPT_AUTO_BYPASS,
+    ZONE_OPT_CHIME,
+    ZONE_OPT_INTERIOR,
 )
 from custom_components.inim_prime.coordinator import InimDataUpdateCoordinator
-from tests.test_local6004 import _FakeReader, _FakeWriter, _resp, _status_resp
+from tests.test_local6004 import _decrypt, _FakeReader, _FakeWriter, _resp, _status_resp
 
-# conftest: one area (id 1, disarmed), one zone (id 1, ready) in area 1.
-
-
-def _native() -> AsyncMock:
-    native = AsyncMock()
-    native.async_get_area_statuses.return_value = {}
-    native.async_get_zone_statuses.return_value = {}
-    return native
+# conftest: one area (id 1, disarmed), one zone (id 1, ready) in area 1,
+# scenario 1, output 1.
 
 
 async def _coordinator(
     hass: HomeAssistant,
     entry: MockConfigEntry,
-    cgi: AsyncMock,
-    local_config: Local6004Config,
-    *,
-    commands_on: bool = True,
-    poll: bool = True,
-) -> tuple[InimDataUpdateCoordinator, AsyncMock]:
+    client: AsyncMock,
+    config: Local6004Config,
+) -> InimDataUpdateCoordinator:
     entry.add_to_hass(hass)
-    coordinator = InimDataUpdateCoordinator(hass, entry, cgi)
-    coordinator.local_config = local_config
+    coordinator = InimDataUpdateCoordinator(hass, entry, client, config)
     coordinator.async_set_updated_data(await coordinator._async_update_data())
-    native = _native()
-    if poll:
-        coordinator.async_attach_native(native)
-    if commands_on:
-        coordinator.command_client = native
-    return coordinator, native
+    return coordinator
 
 
-def _set_zone(coordinator: InimDataUpdateCoordinator, **changes: object) -> None:
-    zone = replace(coordinator.data.zones[0], **changes)  # type: ignore[arg-type]
-    coordinator.data = replace(coordinator.data, zones=[zone])
+def _with_zones(config: Local6004Config, *zones: NativeZoneDef) -> Local6004Config:
+    assert config.structure is not None
+    return replace(config, structure=replace(config.structure, zones=list(zones)))
 
 
-# --------------------------------------------------------------- option off
-async def test_option_off_uses_the_cgi_only(
+# --------------------------------------------------------------- commands
+async def test_commands_are_sent_natively_and_refresh(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
 ) -> None:
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config, commands_on=False
-    )
-    await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
-    await commands.async_arm_area(coordinator, 1, ArmMode.DISARM)
-    await commands.async_apply_scenario(coordinator, 1)
-    await commands.async_clear_alarm_memory(coordinator, 1)
-    await commands.async_set_zone_excluded(coordinator, 1, True)
-    await commands.async_set_output(coordinator, 1005, 1)
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    reads = mock_local_client.async_get_area_statuses.await_count
 
-    mock_client.arm_area.assert_awaited_once_with(1, ArmMode.TOTAL)
-    mock_client.disarm_area.assert_awaited_once_with(1)
-    mock_client.apply_scenario.assert_awaited_once_with(1)
-    mock_client.clear_alarm_memory.assert_awaited_once_with(1)
-    mock_client.set_zone_excluded.assert_awaited_once_with(1, True)
-    mock_client.set_output.assert_awaited_once_with(1005, 1)
-    for write in (
-        native.async_set_area_modes,
-        native.async_set_zone_bypass,
-        native.async_set_output,
-        native.async_reset_areas,
-    ):
-        write.assert_not_awaited()
-
-
-# ---------------------------------------------------------------- option on
-async def test_option_on_sends_natively_and_refreshes(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-) -> None:
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
     await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
     # Zone 1 (area 1) must be read ready live, right before sending.
-    native.async_set_area_modes.assert_awaited_once_with({1: AreaMode.TOTAL}, require_ready={1})
-    # The state is re-read natively right away.
-    native.async_get_area_statuses.assert_awaited_once()
+    mock_local_client.async_set_area_modes.assert_awaited_once_with(
+        {1: AreaMode.TOTAL}, require_ready={1}
+    )
+    # The state is re-read right away.
+    assert mock_local_client.async_get_area_statuses.await_count == reads + 1
 
     await commands.async_arm_area(coordinator, 1, ArmMode.PARTIAL)
     await commands.async_arm_area(coordinator, 1, ArmMode.SNAPSHOT)
     await commands.async_arm_area(coordinator, 1, ArmMode.DISARM)
     assert [
         (c.args[0], c.kwargs["require_ready"])
-        for c in native.async_set_area_modes.await_args_list[1:]
+        for c in mock_local_client.async_set_area_modes.await_args_list[1:]
     ] == [
         ({1: AreaMode.PARTIAL}, {1}),
         ({1: AreaMode.SNAPSHOT}, {1}),
         ({1: AreaMode.DISARMED}, set()),  # disarming checks nothing
     ]
     await commands.async_clear_alarm_memory(coordinator, 1)
-    native.async_reset_areas.assert_awaited_once_with([1])
+    mock_local_client.async_reset_areas.assert_awaited_once_with([1])
     await commands.async_set_zone_excluded(coordinator, 1, False)
-    native.async_set_zone_bypass.assert_awaited_once_with(1, False)
-    await commands.async_set_output(coordinator, 1005, 1)
-    await commands.async_set_output(coordinator, 1006, 0)
-    assert [c.args for c in native.async_set_output.await_args_list] == [
-        (1005, True),
-        (1006, False),
+    mock_local_client.async_set_zone_bypass.assert_awaited_once_with(1, False)
+    await commands.async_set_output(coordinator, 1505, 1)
+    await commands.async_set_output(coordinator, 1506, 0)
+    assert [c.args for c in mock_local_client.async_set_output.await_args_list] == [
+        (1505, True),
+        (1506, False),
     ]
+    assert mock_local_client.async_get_area_statuses.await_count == reads + 8
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: commands.async_arm_area(c, 1, ArmMode.TOTAL),
+        lambda c: commands.async_apply_scenario(c, 1),
+        lambda c: commands.async_clear_alarm_memory(c, 1),
+        lambda c: commands.async_set_zone_excluded(c, 1, True),
+        lambda c: commands.async_set_output(c, 1, 1),
+    ],
+)
+async def test_unverified_firmware_refuses_every_command(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    call,  # noqa: ANN001
+) -> None:
+    mock_local_client.supports_native_writes = False
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    with pytest.raises(HomeAssistantError) as info:
+        await call(coordinator)
+    assert info.value.translation_key == "command_failed"
     for write in (
-        mock_client.arm_area,
-        mock_client.disarm_area,
-        mock_client.clear_alarm_memory,
-        mock_client.set_zone_excluded,
-        mock_client.set_output,
+        mock_local_client.async_set_area_modes,
+        mock_local_client.async_reset_areas,
+        mock_local_client.async_set_zone_bypass,
+        mock_local_client.async_set_output,
     ):
         write.assert_not_awaited()
 
 
 # ------------------------------------------------------- arming readiness gate
+def _zone(zone_id: int, areas: tuple[int, ...], options: int | None = None) -> NativeZoneDef:
+    return NativeZoneDef(zone_id, f"Zone {zone_id}", zone_id, areas, options=options)
+
+
 @pytest.mark.parametrize(
-    ("zone_areas", "require_ready"),
+    ("modes", "expected"),
     [
-        ({1: [1]}, {1}),
-        ({1: [2]}, set()),  # the only zone is in another area
-        ({1: [1, 2], 5: [1], 6: [3]}, {1, 5}),  # every zone of the area, known or not
-        ({9: [1]}, None),  # zone 1's areas unknown -> cgi
-        ({}, None),  # no zone -> area map at all -> cgi
+        ({1: AreaMode.TOTAL}, {1, 2, 4, 5}),
+        ({1: AreaMode.DISARMED}, set()),  # disarming checks nothing
+        ({2: AreaMode.TOTAL}, {3, 4}),
+        # Interior zones are left out of partial and snapshot arming...
+        ({1: AreaMode.PARTIAL}, {1, 2, 5}),
+        ({1: AreaMode.SNAPSHOT}, {1, 2, 5}),
+        # ...unless one of their areas goes to total.
+        ({1: AreaMode.PARTIAL, 2: AreaMode.TOTAL}, {1, 2, 3, 4, 5}),
+        ({1: AreaMode.PARTIAL, 2: AreaMode.SNAPSHOT}, {1, 2, 3, 5}),
+        ({7: AreaMode.TOTAL}, set()),  # no zone in that area
     ],
 )
-async def test_arm_checks_the_target_zones_live(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-    zone_areas: dict[int, list[int]],
-    require_ready: set[int] | None,
-) -> None:
-    config = replace(mock_local_config, zone_areas=zone_areas)
-    coordinator, native = await _coordinator(hass, mock_config_entry, mock_client, config)
-    # The cached state is not trusted: an open zone here changes nothing.
-    _set_zone(coordinator, state=ZoneState.ALARM)
-
-    await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
-
-    if require_ready is None:
-        native.async_set_area_modes.assert_not_awaited()
-        mock_client.arm_area.assert_awaited_once_with(1, ArmMode.TOTAL)
-    else:
-        native.async_set_area_modes.assert_awaited_once_with(
-            {1: AreaMode.TOTAL}, require_ready=require_ready
-        )
-        mock_client.arm_area.assert_not_awaited()
-
-
-async def test_zones_not_ready_live_raises_without_the_cgi(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-) -> None:
-    """A live not-ready zone is reported directly; arming never touches the cgi."""
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
-    native.async_set_area_modes.side_effect = NativeZonesNotReady(3, "zones not ready: [1]")
-
-    with pytest.raises(HomeAssistantError):
-        await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
-    native.async_set_area_modes.assert_awaited_once()
-    mock_client.arm_area.assert_not_awaited()
-
-
-async def test_arm_works_without_the_native_poll(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-) -> None:
-    """The live pre-check does not depend on the poll's cached state."""
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config, poll=False
-    )
-    await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
-    await commands.async_arm_area(coordinator, 1, ArmMode.DISARM)
-    assert [c.args[0] for c in native.async_set_area_modes.await_args_list] == [
-        {1: AreaMode.TOTAL},
-        {1: AreaMode.DISARMED},
+def test_zones_to_check(modes: dict[int, AreaMode], expected: set[int]) -> None:
+    zones = [
+        _zone(1, (1,)),
+        _zone(2, (1,), options=0),
+        _zone(3, (2,)),
+        _zone(4, (1, 2), options=ZONE_OPT_INTERIOR),
+        _zone(5, (1,), options=ZONE_OPT_CHIME),
+        _zone(6, (1, 2), options=ZONE_OPT_AUTO_BYPASS),  # the panel bypasses it
+        _zone(7, (3,), options=ZONE_OPT_AUTO_BYPASS | ZONE_OPT_INTERIOR),
     ]
-    mock_client.arm_area.assert_not_awaited()
-    mock_client.disarm_area.assert_not_awaited()
+    assert commands.zones_to_check(zones, modes) == expected
 
 
-async def test_arm_without_local_config_or_unknown_area_uses_cgi(
+async def test_arm_checks_the_zones_the_panel_would(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
 ) -> None:
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
+    config = _with_zones(
+        mock_local_config,
+        _zone(1, (1,)),
+        _zone(2, (1,), options=ZONE_OPT_INTERIOR),
+        _zone(3, (1,), options=ZONE_OPT_AUTO_BYPASS),
+        _zone(4, (2,)),
     )
-    await commands.async_arm_area(coordinator, 7, ArmMode.DISARM)  # not a known area
-    mock_client.disarm_area.assert_awaited_once_with(7)
-    coordinator.local_config = None
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, config)
+
     await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
-    mock_client.arm_area.assert_awaited_once_with(1, ArmMode.TOTAL)
-    native.async_set_area_modes.assert_not_awaited()
+    await commands.async_arm_area(coordinator, 1, ArmMode.PARTIAL)
+
+    calls = mock_local_client.async_set_area_modes.await_args_list
+    assert [c.kwargs["require_ready"] for c in calls] == [{1, 2}, {1}]
+
+
+async def test_zones_not_ready_live_is_reported(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+) -> None:
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    reads = mock_local_client.async_get_area_statuses.await_count
+    mock_local_client.async_set_area_modes.side_effect = NativeZonesNotReady(
+        3, "zones not ready: [1]"
+    )
+
+    with pytest.raises(HomeAssistantError) as info:
+        await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
+
+    assert info.value.translation_key == "zones_not_ready"
+    mock_local_client.async_set_area_modes.assert_awaited_once()
+    # Nothing was sent: no re-read needed.
+    assert mock_local_client.async_get_area_statuses.await_count == reads
+
+
+async def test_unknown_area_is_refused(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+) -> None:
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    with pytest.raises(HomeAssistantError) as info:
+        await commands.async_arm_area(coordinator, 7, ArmMode.DISARM)
+    assert info.value.translation_key == "command_failed"
+    assert info.value.translation_placeholders == {"error": "unknown area [7]"}
+    mock_local_client.async_set_area_modes.assert_not_awaited()
 
 
 # --------------------------------------------------------------- scenarios
 @pytest.mark.parametrize(
-    ("scenes", "native_modes"),
+    ("scenes", "modes"),
     [
         ([SceneDef(id=1, arms={1: "away"})], {1: AreaMode.TOTAL}),
         ([SceneDef(id=1, arms={1: "stay"})], {1: AreaMode.PARTIAL}),
         ([SceneDef(id=1, arms={1: "disarm"})], {1: AreaMode.DISARMED}),
-        ([SceneDef(id=1, arms={1: "away+stay"})], None),  # no single mode
-        ([SceneDef(id=1, arms={1: "0x8"})], None),
-        ([SceneDef(id=1, arms={1: "away", 4: "away"})], None),  # area 4 unknown
-        ([SceneDef(id=2, arms={1: "away"})], None),  # scenario 1 not defined
     ],
 )
-async def test_scenario_routing(
+async def test_scenario_is_one_native_arming(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
     scenes: list[SceneDef],
-    native_modes: dict[int, AreaMode] | None,
+    modes: dict[int, AreaMode],
 ) -> None:
     config = replace(mock_local_config, scenes=scenes)
-    coordinator, native = await _coordinator(hass, mock_config_entry, mock_client, config)
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, config)
 
     await commands.async_apply_scenario(coordinator, 1)
 
-    if native_modes is None:
-        mock_client.apply_scenario.assert_awaited_once_with(1)
-        native.async_set_area_modes.assert_not_awaited()
-    else:
-        native.async_set_area_modes.assert_awaited_once()
-        assert native.async_set_area_modes.await_args.args == (native_modes,)
-        mock_client.apply_scenario.assert_not_awaited()
+    mock_local_client.async_set_area_modes.assert_awaited_once()
+    assert mock_local_client.async_set_area_modes.await_args.args == (modes,)
+    assert commands.scenario_modes(coordinator, 1) == modes
 
 
-async def test_scenario_on_a_panel_beyond_the_decoded_partitions_uses_cgi(
+@pytest.mark.parametrize(
+    "scenes",
+    [
+        [SceneDef(id=1, arms={1: "away+stay"})],  # no single mode
+        [SceneDef(id=1, arms={1: "0x8"})],  # unknown mode
+        [SceneDef(id=2, arms={1: "away"})],  # scenario 1 not defined
+    ],
+)
+async def test_scenario_without_a_single_mode_per_area_is_refused(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    scenes: list[SceneDef],
+) -> None:
+    config = replace(mock_local_config, scenes=scenes)
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, config)
+
+    with pytest.raises(HomeAssistantError) as info:
+        await commands.async_apply_scenario(coordinator, 1)
+
+    assert info.value.translation_key == "scenario_not_supported"
+    mock_local_client.async_set_area_modes.assert_not_awaited()
+
+
+async def test_scenario_on_a_panel_beyond_the_decoded_partitions_is_refused(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
 ) -> None:
     """Scenes decode partitions 0-11 only; an area 12+ may be a hidden target."""
     config = replace(mock_local_config, scenes=[SceneDef(id=1, arms={1: "away"})])
-    coordinator, native = await _coordinator(hass, mock_config_entry, mock_client, config)
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, config)
     extra = replace(coordinator.data.areas[0], id=SCENE_DECODED_PARTITIONS, label="Far")
     coordinator.data = replace(coordinator.data, areas=[*coordinator.data.areas, extra])
 
-    await commands.async_apply_scenario(coordinator, 1)
+    with pytest.raises(HomeAssistantError) as info:
+        await commands.async_apply_scenario(coordinator, 1)
 
-    mock_client.apply_scenario.assert_awaited_once_with(1)
-    native.async_set_area_modes.assert_not_awaited()
+    assert info.value.translation_key == "scenario_not_supported"
+    mock_local_client.async_set_area_modes.assert_not_awaited()
 
 
-async def test_scenario_without_local_config_uses_cgi(
+async def test_scenario_setting_an_unknown_area_is_refused(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
 ) -> None:
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
-    coordinator.local_config = None
-    await commands.async_apply_scenario(coordinator, 1)
-    mock_client.apply_scenario.assert_awaited_once_with(1)
-    native.async_set_area_modes.assert_not_awaited()
+    config = replace(mock_local_config, scenes=[SceneDef(id=1, arms={1: "away", 4: "away"})])
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, config)
+
+    with pytest.raises(HomeAssistantError) as info:
+        await commands.async_apply_scenario(coordinator, 1)
+
+    assert info.value.translation_key == "command_failed"
+    mock_local_client.async_set_area_modes.assert_not_awaited()
 
 
-# ------------------------------------------------------------ fallback safety
+# ------------------------------------------------------------ failure safety
+_COMMANDS = [
+    (lambda c: commands.async_arm_area(c, 1, ArmMode.TOTAL), "async_set_area_modes"),
+    (lambda c: commands.async_arm_area(c, 1, ArmMode.DISARM), "async_set_area_modes"),
+    (lambda c: commands.async_apply_scenario(c, 1), "async_set_area_modes"),
+    (lambda c: commands.async_clear_alarm_memory(c, 1), "async_reset_areas"),
+    (lambda c: commands.async_set_zone_excluded(c, 1, True), "async_set_zone_bypass"),
+    (lambda c: commands.async_set_output(c, 1, 1), "async_set_output"),
+]
+
+
+@pytest.mark.parametrize(("call", "native_write"), _COMMANDS)
 @pytest.mark.parametrize(
     "error", [NativeCommandNotSent(3, "refused"), NativeCommandInvalid(3, "out of range")]
 )
-async def test_never_sent_falls_back_to_the_cgi_once(
+async def test_never_sent_is_command_failed(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
     caplog: pytest.LogCaptureFixture,
+    call,  # noqa: ANN001
+    native_write: str,
     error: Exception,
 ) -> None:
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
-    native.async_set_area_modes.side_effect = error
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    getattr(mock_local_client, native_write).side_effect = error
 
-    await commands.async_arm_area(coordinator, 1, ArmMode.TOTAL)
+    with pytest.raises(HomeAssistantError) as info:
+        await call(coordinator)
 
-    native.async_set_area_modes.assert_awaited_once()
-    mock_client.arm_area.assert_awaited_once_with(1, ArmMode.TOTAL)
+    assert info.value.translation_key == "command_failed"
+    assert info.value.translation_placeholders == {"error": str(error)}
+    getattr(mock_local_client, native_write).assert_awaited_once()
     assert "was not sent" in caplog.text
 
 
-async def test_a_plain_value_error_is_not_a_fallback(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-) -> None:
-    """Only the client's explicit "never sent" errors may reach the cgi."""
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
-    native.async_set_output.side_effect = ValueError("unexpected")
-    with pytest.raises(ValueError):
-        await commands.async_set_output(coordinator, 1005, 1)
-    mock_client.set_output.assert_not_awaited()
-
-
-async def test_cgi_failure_after_fallback_propagates(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-) -> None:
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
-    native.async_set_zone_bypass.side_effect = NativeCommandNotSent(9, "refused")
-    mock_client.set_zone_excluded.side_effect = InimConnectionError("down")
-    with pytest.raises(InimConnectionError):
-        await commands.async_set_zone_excluded(coordinator, 1, True)
-
-
-@pytest.mark.parametrize(
-    ("call", "native_write", "cgi_write"),
-    [
-        (
-            lambda c: commands.async_arm_area(c, 1, ArmMode.TOTAL),
-            "async_set_area_modes",
-            "arm_area",
-        ),
-        (
-            lambda c: commands.async_arm_area(c, 1, ArmMode.DISARM),
-            "async_set_area_modes",
-            "disarm_area",
-        ),
-        (
-            lambda c: commands.async_apply_scenario(c, 1),
-            "async_set_area_modes",
-            "apply_scenario",
-        ),
-        (
-            lambda c: commands.async_clear_alarm_memory(c, 1),
-            "async_reset_areas",
-            "clear_alarm_memory",
-        ),
-        (
-            lambda c: commands.async_set_zone_excluded(c, 1, True),
-            "async_set_zone_bypass",
-            "set_zone_excluded",
-        ),
-        (lambda c: commands.async_set_output(c, 1005, 1), "async_set_output", "set_output"),
-    ],
-)
+@pytest.mark.parametrize(("call", "native_write"), _COMMANDS)
 @pytest.mark.parametrize(
     "error", [NativeCommandUncertain(3, "TimeoutError"), NativeCommandRejected(3, "bad echo")]
 )
-async def test_possibly_sent_is_never_retried_on_the_cgi(
+async def test_possibly_sent_is_never_retried(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
     call,  # noqa: ANN001
     native_write: str,
-    cgi_write: str,
     error: Exception,
 ) -> None:
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
-    getattr(native, native_write).side_effect = error
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    reads = mock_local_client.async_get_area_statuses.await_count
+    getattr(mock_local_client, native_write).side_effect = error
 
     with pytest.raises(HomeAssistantError) as info:
         await call(coordinator)
 
     assert info.value.translation_key == "native_command_uncertain"
-    getattr(native, native_write).assert_awaited_once()
-    getattr(mock_client, cgi_write).assert_not_awaited()
+    getattr(mock_local_client, native_write).assert_awaited_once()
     # The real state is re-read so the UI shows what the panel did.
-    native.async_get_area_statuses.assert_awaited_once()
-    assert mock_client.get_areas.await_count == 2  # setup cycle + the refresh
+    assert mock_local_client.async_get_area_statuses.await_count == reads + 1
 
 
-# ------------------------------------------------------------ setup / entities
-async def test_setup_option_attaches_the_command_client(
-    hass: HomeAssistant,
-    caplog: pytest.LogCaptureFixture,
-    mock_config_entry: MockConfigEntry,
-    patch_client: AsyncMock,
-    mock_local_client: AsyncMock,
-) -> None:
-    """Commands on with the poll off: the shared connection is still closed on unload."""
-    caplog.set_level(logging.INFO)
-    mock_config_entry.add_to_hass(hass)
-    hass.config_entries.async_update_entry(
-        mock_config_entry,
-        options={CONF_NATIVE_AREA_POLL: False, CONF_NATIVE_COMMANDS: True},
-    )
-    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-    coordinator = mock_config_entry.runtime_data.coordinator
-    assert coordinator.command_client is mock_local_client
-    assert coordinator.native_client is None
-    assert "only refreshed by the slower cgi poll" in caplog.text
-    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
-    mock_local_client.async_close.assert_awaited_once()
-
-
-async def test_native_commands_unverified_firmware_uses_cgi(
-    hass: HomeAssistant,
-    caplog: pytest.LogCaptureFixture,
-    mock_config_entry: MockConfigEntry,
-    patch_client: AsyncMock,
-    mock_local_client: AsyncMock,
-) -> None:
-    """On a firmware whose native writes are not verified (e.g. 5.00), commands use the cgi."""
-    caplog.set_level(logging.WARNING)
-    mock_local_client.supports_native_writes = False
-    mock_config_entry.add_to_hass(hass)
-    hass.config_entries.async_update_entry(
-        mock_config_entry,
-        options={CONF_NATIVE_AREA_POLL: False, CONF_NATIVE_COMMANDS: True},
-    )
-    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-    coordinator = mock_config_entry.runtime_data.coordinator
-    assert coordinator.command_client is None
-    assert "not verified for this panel's firmware" in caplog.text
-    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
-
-
-async def test_setup_default_uses_native_commands(
+async def test_a_plain_value_error_propagates(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    patch_client: AsyncMock,
     mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
 ) -> None:
-    """Native is the default command path: arming goes over the native channel."""
+    """Only the client's own errors are translated."""
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    mock_local_client.async_set_output.side_effect = ValueError("unexpected")
+    with pytest.raises(ValueError):
+        await commands.async_set_output(coordinator, 1, 1)
+
+
+# ------------------------------------------------- native bypass read-back
+def _zone_status(excluded: bool) -> dict[int, NativeZoneStatus]:
+    return {1: NativeZoneStatus(state=ZoneState.READY, excluded=excluded, alarm_memory=False)}
+
+
+@pytest.mark.parametrize(
+    "reads",
+    [
+        [_zone_status(True)],  # applied at once
+        [_zone_status(False), _zone_status(True)],  # shows up on the next read
+        [{}],  # zone not reported: nothing to tell
+        [Local6004Error("down")],  # read failed: nothing to tell
+    ],
+)
+async def test_bypass_read_back_accepts(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    monkeypatch: pytest.MonkeyPatch,
+    reads: list,
+) -> None:
+    monkeypatch.setattr(commands, "_BYPASS_CHECK_DELAY", 0)
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    mock_local_client.async_get_zone_statuses.side_effect = [*reads, _zone_status(True)]
+
+    await commands.async_set_zone_excluded(coordinator, 1, True)
+
+    mock_local_client.async_set_zone_bypass.assert_awaited_once_with(1, True)
+
+
+@pytest.mark.parametrize(("zone_id", "label"), [(1, "Front Door"), (9, "9")])
+async def test_bypass_never_applied_is_reported(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
+    monkeypatch: pytest.MonkeyPatch,
+    zone_id: int,
+    label: str,
+) -> None:
+    """The panel acknowledged but the zone never shows bypassed: a clear error."""
+    monkeypatch.setattr(commands, "_BYPASS_CHECK_DELAY", 0)
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
+    mock_local_client.async_get_zone_statuses.return_value = {
+        zone_id: NativeZoneStatus(state=ZoneState.READY, excluded=False, alarm_memory=False)
+    }
+    reads = mock_local_client.async_get_area_statuses.await_count
+
+    with pytest.raises(HomeAssistantError) as err:
+        await commands.async_set_zone_excluded(coordinator, zone_id, True)
+
+    assert err.value.translation_key == "bypass_not_applied"
+    assert err.value.translation_placeholders == {"zone": label}
+    assert mock_local_client.async_get_zone_statuses.await_count >= commands._BYPASS_CHECKS
+    mock_local_client.async_set_zone_bypass.assert_awaited_once()  # never retried
+    assert mock_local_client.async_get_area_statuses.await_count == reads + 1
+
+
+# ------------------------------------------------------- through the entities
+async def test_entities_send_natively(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    patch_client: AsyncMock,
+) -> None:
     mock_config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
-    assert mock_config_entry.runtime_data.coordinator.command_client is mock_local_client
 
     await hass.services.async_call(
         "alarm_control_panel",
@@ -492,57 +459,36 @@ async def test_setup_default_uses_native_commands(
         {"entity_id": "alarm_control_panel.inim_prime_home"},
         blocking=True,
     )
-    mock_local_client.async_set_area_modes.assert_awaited()
-    patch_client.arm_area.assert_not_awaited()
-
-
-async def test_entities_route_natively_with_the_option_on(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    patch_client: AsyncMock,
-    mock_local_client: AsyncMock,
-) -> None:
-    mock_config_entry.add_to_hass(hass)
-    hass.config_entries.async_update_entry(
-        mock_config_entry, options={CONF_NATIVE_COMMANDS: True}
-    )
-    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    await hass.services.async_call(
-        "alarm_control_panel",
-        "alarm_arm_away",
-        {"entity_id": "alarm_control_panel.inim_prime_home"},
-        blocking=True,
-    )
-    mock_local_client.async_set_area_modes.assert_awaited_once_with(
+    patch_client.async_set_area_modes.assert_awaited_once_with(
         {1: AreaMode.TOTAL}, require_ready={1}
     )
-    patch_client.arm_area.assert_not_awaited()
 
-    mock_local_client.async_set_area_modes.side_effect = NativeCommandUncertain(3, "lost")
-    with pytest.raises(HomeAssistantError, match="may have reached the panel"):
+    patch_client.async_set_area_modes.side_effect = NativeCommandUncertain(3, "lost")
+    with pytest.raises(HomeAssistantError) as info:
         await hass.services.async_call(
             "alarm_control_panel",
             "alarm_disarm",
             {"entity_id": "alarm_control_panel.inim_prime_home"},
             blocking=True,
         )
-    patch_client.disarm_area.assert_not_awaited()
+    assert info.value.translation_key == "native_command_uncertain"
+    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
 
 
 # ------------------------------------- real client on fake streams (no panel)
+def _ops(writer: _FakeWriter) -> list[int]:
+    return [int.from_bytes(_decrypt(frame)[:4], "little") for frame in writer.sent]
+
+
 async def test_garbage_answer_after_sending_is_never_retried(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A bad-preamble answer means the write left: error, and no cgi call."""
-    coordinator, _ = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config, poll=False
-    )
+    """A bad-preamble answer means the write left: uncertain, sent once."""
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
     writer = _FakeWriter()
     garbage = b"\xaa\xaa" + _resp(bytes(18))[2:]
 
@@ -550,27 +496,25 @@ async def test_garbage_answer_after_sending_is_never_retried(
         return _FakeReader(garbage), writer
 
     monkeypatch.setattr(local6004.asyncio, "open_connection", fake_open)
-    coordinator.command_client = local6004.Local6004Client("host", "pass")
+    coordinator.client = local6004.Local6004Client("host", "pass")
 
     with pytest.raises(HomeAssistantError) as info:
         await commands.async_set_zone_excluded(coordinator, 1, True)
 
     assert info.value.translation_key == "native_command_uncertain"
-    assert len(writer.sent) == 1
-    mock_client.set_zone_excluded.assert_not_awaited()
+    # One bypass frame; the refresh after it only reads.
+    assert _ops(writer).count(9) == 1
 
 
-async def test_hung_liveness_read_falls_back_to_the_cgi_once(
+async def test_hung_liveness_read_is_never_sent(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
     mock_local_config: Local6004Config,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The kept connection stalls, the reconnect fails: nothing left, one cgi call."""
-    coordinator, _ = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config, poll=False
-    )
+    """The kept connection stalls, the reconnect fails: nothing written, command_failed."""
+    coordinator = await _coordinator(hass, mock_config_entry, mock_local_client, mock_local_config)
 
     class _StallsAfterFirst(_FakeReader):
         async def readexactly(self, n: int) -> bytes:
@@ -591,65 +535,12 @@ async def test_hung_liveness_read_falls_back_to_the_cgi_once(
     monkeypatch.setattr(local6004, "STATUS_TIMEOUT", 0.05)
     client = local6004.Local6004Client("host", "pass")
     await client.async_get_area_statuses()  # opens the kept connection
-    coordinator.command_client = client
+    coordinator.client = client
 
-    await commands.async_set_output(coordinator, 1005, 1)
+    with pytest.raises(HomeAssistantError) as info:
+        await commands.async_set_output(coordinator, 1005, 1)
 
-    mock_client.set_output.assert_awaited_once_with(1005, 1)
+    assert info.value.translation_key == "command_failed"
     # Only read-only status reads went out: the first read and the probe.
-    assert len(stalled_writer.sent) == 2
+    assert _ops(stalled_writer) == [6, 6]
     assert len(opened) == 2
-
-
-# ------------------------------------------------- native bypass read-back
-def _zone_status(excluded: bool) -> dict[int, NativeZoneStatus]:
-    return {1: NativeZoneStatus(state=ZoneState.READY, excluded=excluded, alarm_memory=False)}
-
-
-@pytest.mark.parametrize(
-    "reads",
-    [
-        [_zone_status(True)],  # applied at once
-        [_zone_status(False), _zone_status(True)],  # shows up on the next read
-        [{}],  # zone not reported: nothing to tell
-        [Local6004Error("down")],  # read failed: nothing to tell
-    ],
-)
-async def test_native_bypass_read_back_accepts(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-    monkeypatch: pytest.MonkeyPatch,
-    reads: list,
-) -> None:
-    monkeypatch.setattr(commands, "_BYPASS_CHECK_DELAY", 0)
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config, poll=False
-    )
-    native.async_get_zone_statuses.side_effect = reads
-    await commands.async_set_zone_excluded(coordinator, 1, True)
-    native.async_set_zone_bypass.assert_awaited_once_with(1, True)
-    mock_client.set_zone_excluded.assert_not_awaited()
-
-
-async def test_native_bypass_never_applied_is_reported(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    mock_local_config: Local6004Config,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The panel acknowledged but the zone never shows bypassed: a clear error."""
-    monkeypatch.setattr(commands, "_BYPASS_CHECK_DELAY", 0)
-    coordinator, native = await _coordinator(
-        hass, mock_config_entry, mock_client, mock_local_config
-    )
-    native.async_get_zone_statuses.return_value = _zone_status(False)
-    with pytest.raises(HomeAssistantError) as err:
-        await commands.async_set_zone_excluded(coordinator, 1, True)
-    assert err.value.translation_key == "bypass_not_applied"
-    assert err.value.translation_placeholders == {"zone": "Front Door"}
-    assert native.async_get_zone_statuses.await_count >= commands._BYPASS_CHECKS
-    # Never retried on the cgi.
-    mock_client.set_zone_excluded.assert_not_awaited()

@@ -19,26 +19,20 @@ from pytest_homeassistant_custom_component.common import (  # noqa: E402
 )
 
 from custom_components.inim_prime.client import (  # noqa: E402
-    ApiStats,
-    Area,
+    FAULT_FLAG_KEYS,
     AreaMode,
-    AreaState,
-    Fault,
     Local6004Config,
     Local6004Structure,
+    NativeAreaStatus,
     NativeObject,
+    NativeSystemStatus,
     NativeZoneDef,
-    Output,
-    Scenario,
+    NativeZoneStatus,
     SceneDef,
-    Version,
-    Zone,
     ZoneState,
 )
 from custom_components.inim_prime.const import (  # noqa: E402
-    CONF_APIKEY,
     CONF_LOCAL_PASSWORD,
-    CONF_USE_HTTPS,
     DOMAIN,
 )
 
@@ -51,128 +45,50 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 @pytest.fixture
 def entry_data() -> dict:
-    """Return valid config-entry data (the 6004 LAN password is mandatory)."""
-    return {
-        "host": "192.0.2.10",
-        "port": 8080,
-        CONF_APIKEY: "secret-key",
-        CONF_USE_HTTPS: False,
-        CONF_LOCAL_PASSWORD: "pass",
-        "scan_interval": 15,
-    }
+    """Return valid config-entry data: the host and the panel LAN password."""
+    return {"host": "192.0.2.10", CONF_LOCAL_PASSWORD: "pass"}
 
 
 @pytest.fixture
 def mock_config_entry(entry_data: dict) -> MockConfigEntry:
-    """Return a mock config entry."""
+    """Return a mock (native-only, version 2) config entry."""
     return MockConfigEntry(
         domain=DOMAIN,
         title="INIM Prime",
         data=entry_data,
-        unique_id="192.0.2.10:8080",
+        unique_id="192.0.2.10",
+        version=2,
+    )
+
+
+def system_status(
+    *, supply: float = 13.7, service: bool = False, **faults: bool
+) -> NativeSystemStatus:
+    """Build a system status with the given fault flags set (others clear)."""
+    flags = {key: faults.get(key, False) for key in FAULT_FLAG_KEYS}
+    return NativeSystemStatus(
+        faults=flags,
+        has_faults=any(flags.values()),
+        supply_voltage=supply,
+        battery_voltage=13.4,
+        service=service,
+        programming=False,
+        raw=bytes(12),
     )
 
 
 @pytest.fixture
-def sample_version() -> Version:
-    """Return a sample Version."""
-    return Version(
-        # ``version`` is the local API version (NOT the firmware); the real
-        # firmware (4.07) lives in ``primex`` — mirrors the live panel response.
-        version="1.0.1",
-        verhttp="1.0.0",
-        primex="4.07 PX500",
-        servizio=False,
-    )
-
-
-@pytest.fixture
-def sample_areas() -> list[Area]:
-    """Return sample areas."""
-    return [
-        Area(
-            id=1,
-            label="Home",
-            mode=AreaMode.DISARMED,
-            state=AreaState.READY,
-            alarm_memory=False,
-        )
-    ]
-
-
-@pytest.fixture
-def sample_zones() -> list[Zone]:
-    """Return sample zones."""
-    return [
-        Zone(
-            id=1,
-            label="Front Door",
-            terminal=1,
-            state=ZoneState.READY,
-            alarm_memory=False,
-            excluded=False,
-        )
-    ]
-
-
-@pytest.fixture
-def sample_scenarios() -> list[Scenario]:
-    """Return sample scenarios."""
-    return [Scenario(id=1, label="Away", active=False)]
-
-
-@pytest.fixture
-def sample_outputs() -> list[Output]:
-    """Return sample outputs."""
-    return [Output(id=1, label="Siren", terminal=1, state=0, type=0)]
-
-
-@pytest.fixture
-def sample_fault() -> Fault:
-    """Return a sample Fault."""
-    return Fault(vcc=13.7, raw_fau="0", has_faults=False)
-
-
-@pytest.fixture
-def sample_api_stats() -> ApiStats:
-    """Return sample ApiStats."""
-    return ApiStats(
-        api="primex",
-        connections=3,
-        last_connection="12:00 24/06/2026",
-        last_ip="192.0.2.1",
-    )
-
-
-@pytest.fixture
-def mock_client(
-    sample_version: Version,
-    sample_areas: list[Area],
-    sample_zones: list[Zone],
-    sample_scenarios: list[Scenario],
-    sample_outputs: list[Output],
-    sample_fault: Fault,
-    sample_api_stats: ApiStats,
-) -> AsyncMock:
-    """Return a fully-stubbed InimPrimeClient."""
-    client = AsyncMock()
-    client.version.return_value = sample_version
-    client.get_areas.return_value = sample_areas
-    client.get_zones.return_value = sample_zones
-    client.get_scenarios.return_value = sample_scenarios
-    client.get_outputs.return_value = sample_outputs
-    client.get_faults.return_value = sample_fault
-    client.get_api_stats.return_value = sample_api_stats
-    return client
+def make_system_status():
+    """Return :func:`system_status`, to build a live system status in a test."""
+    return system_status
 
 
 @pytest.fixture
 def mock_local_config() -> Local6004Config:
-    """A valid 6004 config (mandatory channel) used by the test harness.
+    """The panel's static config, as read natively at setup.
 
-    Scene 1 targets area 1 (sample_areas area 1 is DISARMED) so it reads active.
-    The native structure matches the sample cgi objects, as it does on a real
-    panel, so setup runs the native-structure path by default.
+    One area (1, disarmed), one zone (1, in area 1), one scenario (1, whose
+    definition disarms area 1, so it reads active) and one output (1).
     """
     return Local6004Config(
         firmware="4.07 PX020",
@@ -189,36 +105,49 @@ def mock_local_config() -> Local6004Config:
 
 
 @pytest.fixture
-def mock_local_client(mock_local_config: Local6004Config) -> AsyncMock:
-    """Return a stubbed Local6004Client (native area poll reports no areas)."""
+def area_statuses() -> dict[int, NativeAreaStatus]:
+    """Live partition statuses: area 1 disarmed, no alarm."""
+    return {1: NativeAreaStatus(mode=AreaMode.DISARMED, alarm=False, alarm_memory=False)}
+
+
+@pytest.fixture
+def zone_statuses() -> dict[int, NativeZoneStatus]:
+    """Live zone statuses: zone 1 ready, not bypassed."""
+    return {1: NativeZoneStatus(state=ZoneState.READY, excluded=False, alarm_memory=False)}
+
+
+@pytest.fixture
+def mock_local_client(
+    mock_local_config: Local6004Config,
+    area_statuses: dict[int, NativeAreaStatus],
+    zone_statuses: dict[int, NativeZoneStatus],
+) -> AsyncMock:
+    """Return a stubbed Local6004Client answering with the fixtures above.
+
+    The status readers return the fixture dicts themselves, so a test can
+    change the live state by mutating them before the next refresh.
+    """
     local = AsyncMock()
     local.async_read_config.return_value = mock_local_config
-    local.async_get_area_statuses.return_value = {}
-    local.async_get_zone_statuses.return_value = {}
+    local.async_get_area_statuses.return_value = area_statuses
+    local.async_get_zone_statuses.return_value = zone_statuses
+    local.async_get_output_states.return_value = {1: 0}
+    local.async_get_system_status.return_value = system_status()
     local.supports_native_writes = True
     return local
 
 
 @pytest.fixture
-def patch_client(mock_client: AsyncMock, mock_local_client: AsyncMock):
-    """Patch the cgi client AND the mandatory 6004 client in __init__/config_flow."""
-    local = mock_local_client
+def patch_client(mock_local_client: AsyncMock):
+    """Patch the native client in __init__ and config_flow; yield the mock."""
     with (
         patch(
-            "custom_components.inim_prime.InimPrimeClient",
-            return_value=mock_client,
-        ),
-        patch(
-            "custom_components.inim_prime.config_flow.InimPrimeClient",
-            return_value=mock_client,
-        ),
-        patch(
             "custom_components.inim_prime.Local6004Client",
-            return_value=local,
+            return_value=mock_local_client,
         ),
         patch(
             "custom_components.inim_prime.config_flow.Local6004Client",
-            return_value=local,
+            return_value=mock_local_client,
         ),
     ):
-        yield mock_client
+        yield mock_local_client

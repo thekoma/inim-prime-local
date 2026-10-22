@@ -1,4 +1,4 @@
-"""Config flow for the INIM Prime integration."""
+"""Config flow for the INIM Prime integration (native TCP 6004 only)."""
 
 from __future__ import annotations
 
@@ -14,9 +14,8 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
+from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import callback
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     SelectOptionDict,
     SelectSelector,
@@ -28,38 +27,18 @@ from homeassistant.helpers.selector import (
 )
 
 from .areas import default_area_selection
-from .client import (
-    ApiStatus,
-    Area,
-    InimApiError,
-    InimConnectionError,
-    InimPrimeClient,
-    Local6004Client,
-    Local6004Error,
-)
+from .client import Area, Local6004Client, Local6004Error
 from .const import (
-    CONF_APIKEY,
     CONF_AREAS,
     CONF_AREAS_OFFERED,
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
-    CONF_NATIVE_AREA_POLL,
-    CONF_NATIVE_COMMANDS,
-    CONF_SCAN_INTERVAL_ACTIVE,
-    CONF_SCAN_INTERVAL_IDLE,
-    CONF_USE_HTTPS,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DEFAULT_GROUP_BY_ROOM,
     DEFAULT_LOCAL_PASSWORD,
     DEFAULT_NAME,
-    DEFAULT_NATIVE_AREA_POLL,
-    DEFAULT_NATIVE_COMMANDS,
-    DEFAULT_PORT,
-    DEFAULT_SCAN_INTERVAL_ACTIVE,
-    DEFAULT_SCAN_INTERVAL_IDLE,
-    DEFAULT_USE_HTTPS,
     DOMAIN,
     LABEL_LANGUAGE_AUTO,
     LOCAL_6004_PORT,
@@ -67,52 +46,30 @@ from .const import (
 from .coordinator import InimConfigEntry
 from .zone_guess import SUPPORTED_LANGUAGES
 
+_PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
 
 class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for INIM Prime."""
+    """Handle a config flow for INIM Prime.
 
-    VERSION = 1
+    Version 2: native only (host + LAN password). Version 1 entries also held
+    the panel's cgi settings; ``async_migrate_entry`` drops them.
+    """
 
-    async def _async_validate(self, user_input: dict[str, Any]) -> dict[str, str]:
-        """Validate connection details. Return a (possibly empty) error map."""
-        errors: dict[str, str] = {}
+    VERSION = 2
 
-        client = InimPrimeClient(
-            host=user_input[CONF_HOST],
-            port=user_input[CONF_PORT],
-            apikey=user_input[CONF_APIKEY],
-            session=async_get_clientsession(self.hass),
-            use_https=user_input[CONF_USE_HTTPS],
-        )
-
+    async def _async_validate(self, host: str, password: str) -> dict[str, str]:
+        """Read the panel's config natively. Return a (possibly empty) error map."""
+        client = Local6004Client(host=host, password=password, port=LOCAL_6004_PORT)
         try:
-            await client.version()
-        except InimApiError as err:
-            if err.status == ApiStatus.ERROR_APIKEY:
-                errors["base"] = "invalid_auth"
-            else:
-                errors["base"] = "unknown"
-        except InimConnectionError:
-            errors["base"] = "cannot_connect"
+            config = await client.async_read_config()
+        except Local6004Error:
+            return {"base": "cannot_connect"}
         except Exception:  # noqa: BLE001
-            errors["base"] = "unknown"
-
-        # The local 6004 channel is mandatory: validate it too (skip if the cgi
-        # check already failed, to surface the primary error first).
-        if not errors:
-            local = Local6004Client(
-                host=user_input[CONF_HOST],
-                password=user_input.get(CONF_LOCAL_PASSWORD, DEFAULT_LOCAL_PASSWORD),
-                port=LOCAL_6004_PORT,
-            )
-            try:
-                await local.async_read_config()
-            except Local6004Error:
-                errors["base"] = "local_cannot_connect"
-            # A firmware whose native layout is not mapped is not an error here:
-            # setup then runs cgi-only (see _async_setup_local).
-
-        return errors
+            return {"base": "unknown"}
+        if not config.layout_ok:
+            return {"base": "unsupported_firmware"}
+        return {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
@@ -120,12 +77,10 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             host = user_input[CONF_HOST]
-            port = user_input[CONF_PORT]
-
-            await self.async_set_unique_id(f"{host}:{port}")
+            await self.async_set_unique_id(host)
             self._abort_if_unique_id_configured()
 
-            errors = await self._async_validate(user_input)
+            errors = await self._async_validate(host, user_input[CONF_LOCAL_PASSWORD])
             if not errors:
                 return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
 
@@ -135,44 +90,38 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_NAME, default=DEFAULT_NAME): str,
                     vol.Required(CONF_HOST): str,
-                    vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
-                    vol.Required(CONF_APIKEY): str,
-                    vol.Required(CONF_USE_HTTPS, default=DEFAULT_USE_HTTPS): bool,
-                    vol.Required(
-                        CONF_LOCAL_PASSWORD, default=DEFAULT_LOCAL_PASSWORD
-                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                    vol.Required(CONF_LOCAL_PASSWORD, default=DEFAULT_LOCAL_PASSWORD): _PASSWORD,
                 }
             ),
             errors=errors,
         )
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
-        """Handle reauthentication when the panel rejects the API key."""
+        """Handle reauthentication: the panel LAN password changed."""
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Confirm reauthentication by re-entering the API key.
+        """Confirm reauthentication by re-entering the LAN password.
 
-        Host/port/HTTPS are taken from the existing entry (not changeable here);
-        only the API key is re-entered and validated against the panel.
+        The host is taken from the existing entry (not changeable here); only
+        the password is re-entered and validated against the panel.
         """
         errors: dict[str, str] = {}
         entry = self._get_reauth_entry()
 
         if user_input is not None:
-            validate_input = {**entry.data, CONF_APIKEY: user_input[CONF_APIKEY]}
-            errors = await self._async_validate(validate_input)
+            password = user_input[CONF_LOCAL_PASSWORD]
+            errors = await self._async_validate(entry.data[CONF_HOST], password)
             if not errors:
                 return self.async_update_reload_and_abort(
-                    entry,
-                    data_updates={CONF_APIKEY: user_input[CONF_APIKEY]},
+                    entry, data_updates={CONF_LOCAL_PASSWORD: password}
                 )
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required(CONF_APIKEY): str}),
+            data_schema=vol.Schema({vol.Required(CONF_LOCAL_PASSWORD): _PASSWORD}),
             description_placeholders={CONF_HOST: entry.data[CONF_HOST]},
             errors=errors,
         )
@@ -180,29 +129,26 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Reconfigure an existing entry (e.g. rotate the API key)."""
+        """Reconfigure an existing entry (name, host or LAN password)."""
         errors: dict[str, str] = {}
         entry = self._get_reconfigure_entry()
 
         if user_input is not None:
             host = user_input[CONF_HOST]
-            port = user_input[CONF_PORT]
-            new_unique_id = f"{host}:{port}"
-
-            # unique_id is derived from host:port. Allow it to change as part of
-            # the reconfigure, but reject collisions with a *different* entry.
+            # unique_id is the host. Allow it to change as part of the
+            # reconfigure, but reject collisions with a *different* entry.
             collision = self.hass.config_entries.async_entry_for_domain_unique_id(
-                self.handler, new_unique_id
+                self.handler, host
             )
             if collision is not None and collision.entry_id != entry.entry_id:
                 return self.async_abort(reason="already_configured")
 
-            errors = await self._async_validate(user_input)
+            errors = await self._async_validate(host, user_input[CONF_LOCAL_PASSWORD])
             if not errors:
                 return self.async_update_reload_and_abort(
                     entry,
                     title=user_input[CONF_NAME],
-                    unique_id=new_unique_id,
+                    unique_id=host,
                     data_updates=user_input,
                 )
 
@@ -214,18 +160,9 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_NAME, default=suggested.get(CONF_NAME, entry.title)): str,
                     vol.Required(CONF_HOST, default=suggested.get(CONF_HOST)): str,
                     vol.Required(
-                        CONF_PORT,
-                        default=suggested.get(CONF_PORT, DEFAULT_PORT),
-                    ): int,
-                    vol.Required(CONF_APIKEY): str,
-                    vol.Required(
-                        CONF_USE_HTTPS,
-                        default=suggested.get(CONF_USE_HTTPS, DEFAULT_USE_HTTPS),
-                    ): bool,
-                    vol.Required(
                         CONF_LOCAL_PASSWORD,
                         default=suggested.get(CONF_LOCAL_PASSWORD, DEFAULT_LOCAL_PASSWORD),
-                    ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+                    ): _PASSWORD,
                 }
             ),
             errors=errors,
@@ -243,11 +180,10 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
 class InimPrimeOptionsFlow(OptionsFlowWithReload):
     """Handle INIM Prime options.
 
-    Exposes the legacy scan interval plus the adaptive idle/active intervals
-    and a "push mode" toggle. Enabling push mode generates a per-entry webhook
-    id (the cleartext-LAN shared secret) and surfaces the full local webhook
-    URL to the user via a persistent notification so they can paste it into
-    PrimeStudio (design doc §2.2/§3).
+    The areas to show, the zone-label language and room grouping, and a "push
+    mode" toggle. Enabling push mode generates a per-entry webhook id (the
+    cleartext-LAN shared secret) and surfaces the full local webhook URL to the
+    user via a persistent notification so they can paste it into PrimeStudio.
     """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -315,16 +251,6 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                 {
                     **schema,
                     vol.Required(
-                        CONF_SCAN_INTERVAL_IDLE,
-                        default=options.get(CONF_SCAN_INTERVAL_IDLE, DEFAULT_SCAN_INTERVAL_IDLE),
-                    ): int,
-                    vol.Required(
-                        CONF_SCAN_INTERVAL_ACTIVE,
-                        default=options.get(
-                            CONF_SCAN_INTERVAL_ACTIVE, DEFAULT_SCAN_INTERVAL_ACTIVE
-                        ),
-                    ): int,
-                    vol.Required(
                         CONF_WEBHOOK_ENABLED,
                         default=options.get(CONF_WEBHOOK_ENABLED, False),
                     ): bool,
@@ -341,14 +267,6 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                     vol.Required(
                         CONF_GROUP_BY_ROOM,
                         default=options.get(CONF_GROUP_BY_ROOM, DEFAULT_GROUP_BY_ROOM),
-                    ): bool,
-                    vol.Required(
-                        CONF_NATIVE_AREA_POLL,
-                        default=options.get(CONF_NATIVE_AREA_POLL, DEFAULT_NATIVE_AREA_POLL),
-                    ): bool,
-                    vol.Required(
-                        CONF_NATIVE_COMMANDS,
-                        default=options.get(CONF_NATIVE_COMMANDS, DEFAULT_NATIVE_COMMANDS),
                     ): bool,
                 }
             ),

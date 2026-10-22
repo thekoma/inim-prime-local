@@ -2,7 +2,7 @@
 
 Requires homeassistant + pytest-homeassistant-custom-component and network access to
 the panel. Reads connection details from environment (docker compose passes .env):
-INIM_HOST, INIM_PORT, INIM_APIKEY, INIM_USE_HTTPS.
+INIM_HOST and INIM_LOCAL_PASSWORD (the panel LAN password, default 'pass').
 """
 
 from __future__ import annotations
@@ -24,11 +24,11 @@ pytest_plugins = ["pytest_homeassistant_custom_component"]
 # loader can discover it (mirrors tests_ha/conftest.py).
 from custom_components.inim_prime.const import DOMAIN  # noqa: E402,F401
 
-REQUIRED = ("INIM_HOST", "INIM_APIKEY")
+REQUIRED = ("INIM_HOST",)
 
 
 class _Secret(str):
-    """A str whose repr is redacted, so the apikey never lands in pytest output/logs."""
+    """A str whose repr is redacted, so the password never lands in pytest output/logs."""
 
     def __repr__(self) -> str:  # noqa: D401
         return "'***'"
@@ -42,12 +42,9 @@ def panel_config() -> dict:
     default 'pass' when INIM_LOCAL_PASSWORD is not set.
     """
     if not all(os.environ.get(k) for k in REQUIRED):
-        pytest.skip("INIM_HOST/INIM_APIKEY not set — skipping live E2E")
+        pytest.skip("INIM_HOST not set — skipping live E2E")
     return {
         "host": os.environ["INIM_HOST"],
-        "port": int(os.environ.get("INIM_PORT", "8080")),
-        "apikey": _Secret(os.environ["INIM_APIKEY"]),
-        "use_https": os.environ.get("INIM_USE_HTTPS", "false").lower() == "true",
         "local_6004_password": _Secret(os.environ.get("INIM_LOCAL_PASSWORD", "pass")),
     }
 

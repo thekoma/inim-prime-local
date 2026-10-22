@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -24,18 +24,13 @@ from custom_components.inim_prime.client import (
     Zone,
     ZoneState,
 )
-from custom_components.inim_prime.const import (
-    CONF_LOCAL_PASSWORD,
-    CONF_NATIVE_AREA_POLL,
-    CONF_NATIVE_COMMANDS,
-    DOMAIN,
-)
+from custom_components.inim_prime.const import CONF_LOCAL_PASSWORD, DOMAIN
 from custom_components.inim_prime.coordinator import InimData, InimDataUpdateCoordinator
 
 
 def _data(area_modes: dict[int, AreaMode]) -> InimData:
     return InimData(
-        version=Version(version="4.07", verhttp="1.0", primex="4.07 PX020", servizio=False),
+        version=Version(raw="4.07 PX020", service=False),
         areas=[
             Area(id=aid, label=f"Area {aid}", mode=mode, state=AreaState.READY, alarm_memory=False)
             for aid, mode in area_modes.items()
@@ -50,10 +45,9 @@ def _data(area_modes: dict[int, AreaMode]) -> InimData:
                 excluded=False,
             )
         ],
-        scenarios=[Scenario(id=0, label="Ins.Box", active=False)],
+        scenarios=[Scenario(id=0, label="Arm garage", active=False)],
         outputs=[],
-        fault=Fault(vcc=13.7, raw_fau="0", has_faults=False),
-        api_stats=None,
+        fault=Fault(vcc=13.7, has_faults=False),
     )
 
 
@@ -75,7 +69,7 @@ def test_scene_sensor_on_off_and_metadata() -> None:
     coord = _fake_coord({3: AreaMode.TOTAL}, scenes, active_ids={0})
     sensor = InimSceneActiveBinarySensor(coord, 0)
     assert sensor.unique_id == "abc_scene_0"
-    assert sensor.name == "Ins.Box"  # live cgi label
+    assert sensor.name == "Arm garage"  # live label
     assert sensor.is_on is True
     # arms exposed by area label
     assert sensor.extra_state_attributes == {"arms": {"Area 3": "away"}}
@@ -84,9 +78,9 @@ def test_scene_sensor_on_off_and_metadata() -> None:
     assert sensor.is_on is False
 
 
-def test_scene_sensor_label_fallback_when_no_cgi_match() -> None:
+def test_scene_sensor_label_fallback_when_not_listed() -> None:
     coord = _fake_coord({}, [SceneDef(id=7, arms={0: "away"})], active_ids=set())
-    sensor = InimSceneActiveBinarySensor(coord, 7)  # no cgi scenario with id 7
+    sensor = InimSceneActiveBinarySensor(coord, 7)  # no listed scenario with id 7
     assert sensor.name == "Scenario 7"
 
 
@@ -95,14 +89,16 @@ def test_scene_sensor_attributes_none_when_unknown() -> None:
     # a scene id with no matching definition -> no attributes
     sensor = InimSceneActiveBinarySensor(coord, 99)
     assert sensor.extra_state_attributes is None
-    coord.local_config = None
-    assert sensor.extra_state_attributes is None
 
 
 # ----------------------------------------------------------- coordinator
-async def test_active_scene_ids(hass: HomeAssistant, mock_config_entry, mock_client) -> None:
-    coord = InimDataUpdateCoordinator(hass, mock_config_entry, mock_client)
-    # no local config -> always empty
+async def test_active_scene_ids(
+    hass: HomeAssistant, mock_config_entry, mock_local_client
+) -> None:
+    coord = InimDataUpdateCoordinator(
+        hass, mock_config_entry, mock_local_client, Local6004Config("4.07", layout_ok=True)
+    )
+    # no scenario definitions -> always empty
     coord.data = _data({0: AreaMode.TOTAL})
     assert coord.active_scene_ids() == set()
     # with definitions: scene 0 needs area0 away (matches), scene 1 needs disarm (no)
@@ -117,11 +113,11 @@ async def test_active_scene_ids(hass: HomeAssistant, mock_config_entry, mock_cli
     assert coord.active_scene_ids() == set()
 
 
-# --------------------------------------------------------------- setup (mandatory 6004)
+# --------------------------------------------------------------- setup
 async def test_setup_creates_scene_sensor(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, patch_client: AsyncMock
 ) -> None:
-    """Mandatory 6004: setup reads the config and creates enabled scene sensors.
+    """Setup reads the config natively and creates enabled scene sensors.
 
     The harness mock_local_config defines scene id 1 targeting area 1 (DISARMED),
     so the scene reads active.
@@ -130,9 +126,7 @@ async def test_setup_creates_scene_sensor(
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    coord = mock_config_entry.runtime_data.coordinator
-    assert coord.local_config is not None
-    assert mock_config_entry.runtime_data.local_client is not None
+    assert mock_config_entry.runtime_data.client is patch_client
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id(
         "binary_sensor", DOMAIN, f"{mock_config_entry.entry_id}_scene_1"
@@ -141,6 +135,7 @@ async def test_setup_creates_scene_sensor(
     # enabled by default (not disabled) and active
     assert registry.async_get(entity_id).disabled_by is None
     assert hass.states.get(entity_id).state == "on"
+    assert hass.states.get(entity_id).attributes["arms"] == {"Home": "disarm"}
 
 
 async def test_setup_missing_password_fails(
@@ -149,7 +144,7 @@ async def test_setup_missing_password_fails(
     """No LAN password -> setup errors (ConfigEntryError), nothing loads."""
     data = {k: v for k, v in entry_data.items() if k != CONF_LOCAL_PASSWORD}
     entry = MockConfigEntry(
-        domain=DOMAIN, title="INIM Prime", data=data, unique_id="192.0.2.10:8080"
+        domain=DOMAIN, title="INIM Prime", data=data, unique_id="192.0.2.10", version=2
     )
     entry.add_to_hass(hass)
     assert not await hass.config_entries.async_setup(entry.entry_id)
@@ -160,37 +155,22 @@ async def test_setup_missing_password_fails(
 async def test_setup_local_read_error_not_ready(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, patch_client: AsyncMock
 ) -> None:
-    """A 6004 read failure aborts setup (ConfigEntryNotReady) — no cgi-only fallback."""
+    """A native config read failure is retried by Home Assistant (ConfigEntryNotReady)."""
+    patch_client.async_read_config.side_effect = Local6004Error("boom")
     mock_config_entry.add_to_hass(hass)
-    with patch("custom_components.inim_prime.Local6004Client") as cls:
-        cls.return_value.async_read_config = AsyncMock(side_effect=Local6004Error("boom"))
-        assert not await hass.config_entries.async_setup(mock_config_entry.entry_id)
-        await hass.async_block_till_done()
+    assert not await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
     assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
 
 
-async def test_setup_unknown_layout_runs_cgi_only(
+async def test_setup_unknown_layout_is_not_supported(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, patch_client: AsyncMock
 ) -> None:
-    """A firmware whose native layout is not mapped (e.g. a future 6.x) sets up cgi-only.
-
-    Even with the native poll and native commands enabled, no native client is
-    attached: states and commands go over the cgi. (4.x and 5.00 are mapped and
-    run natively; this covers the fallback for a major we have not mapped.)
-    """
-    cfg = Local6004Config(firmware="6.00 PX020", layout_ok=False)
-    mock_config_entry.add_to_hass(hass)
-    hass.config_entries.async_update_entry(
-        mock_config_entry, options={CONF_NATIVE_AREA_POLL: True, CONF_NATIVE_COMMANDS: True}
+    """A firmware whose memory map is not known (e.g. a future 6.x) is refused."""
+    patch_client.async_read_config.return_value = Local6004Config(
+        firmware="6.00 PX020", layout_ok=False
     )
-    with patch("custom_components.inim_prime.Local6004Client") as cls:
-        cls.return_value.async_read_config = AsyncMock(return_value=cfg)
-        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
-        await hass.async_block_till_done()
-    assert mock_config_entry.state is ConfigEntryState.LOADED
-    runtime = mock_config_entry.runtime_data
-    assert runtime.local_client is None
-    assert runtime.coordinator.local_config is None
-    assert runtime.coordinator.native_client is None
-    assert runtime.coordinator.command_client is None
-    assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+    mock_config_entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR

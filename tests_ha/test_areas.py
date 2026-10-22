@@ -18,7 +18,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.inim_prime.client import Area, AreaMode, AreaState, Local6004Config
+from custom_components.inim_prime.client import Local6004Config, NativeObject
 from custom_components.inim_prime.const import CONF_AREAS, CONF_AREAS_OFFERED, DOMAIN
 
 # Per-area unique-id stems, by entity domain.
@@ -29,22 +29,21 @@ _AREA_ENTITIES = {
 }
 
 
-def _area(area_id: int, label: str) -> Area:
-    return Area(
-        id=area_id, label=label, mode=AreaMode.DISARMED, state=AreaState.READY, alarm_memory=False
-    )
+# Three named areas (ids 0, 1, 4) and one factory-default one (id 5).
+_AREAS = [
+    NativeObject(0, "Day"),
+    NativeObject(1, "Night"),
+    NativeObject(4, "Entrance"),
+    NativeObject(5, "AREA       006 "),
+]
 
 
 @pytest.fixture
 def mock_local_config(mock_local_config: Local6004Config) -> Local6004Config:
-    """Drop the native structure so the cgi area list drives the entity set."""
-    return replace(mock_local_config, structure=None)
-
-
-@pytest.fixture
-def sample_areas() -> list[Area]:
-    """Three named areas (ids 0, 1, 4) and one factory-default one (id 5)."""
-    return [_area(0, "Day"), _area(1, "Night"), _area(4, "Entrance"), _area(5, "AREA       006 ")]
+    """The panel's areas, as the native structure read lists them."""
+    structure = mock_local_config.structure
+    assert structure is not None
+    return replace(mock_local_config, structure=replace(structure, areas=list(_AREAS)))
 
 
 def _entry(entry_data: dict, options: dict | None = None) -> MockConfigEntry:
@@ -53,7 +52,8 @@ def _entry(entry_data: dict, options: dict | None = None) -> MockConfigEntry:
         title="INIM Prime",
         data=entry_data,
         options=options or {},
-        unique_id="192.0.2.10:8080",
+        unique_id="192.0.2.10",
+        version=2,
     )
 
 
@@ -227,7 +227,7 @@ async def test_area_added_after_the_selection_is_hidden_and_warned_once(
     hass: HomeAssistant,
     entry_data: dict,
     patch_client: AsyncMock,
-    sample_areas: list[Area],
+    mock_local_config: Local6004Config,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A new panel area stays hidden, with one warning; a deselected one is not warned."""
@@ -235,8 +235,17 @@ async def test_area_added_after_the_selection_is_hidden_and_warned_once(
     caplog.set_level(logging.WARNING)
     await _setup(hass, entry)
     assert "is not shown" not in caplog.text
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
-    patch_client.get_areas.return_value = [*sample_areas, _area(7, "Garage")]
+    # Area 7 was added on the panel since: the structure read at setup lists it.
+    structure = mock_local_config.structure
+    assert structure is not None
+    patch_client.async_read_config.return_value = replace(
+        mock_local_config,
+        structure=replace(structure, areas=[*_AREAS, NativeObject(7, "Garage")]),
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
     for _ in range(3):
         await entry.runtime_data.coordinator.async_refresh()
         await hass.async_block_till_done()

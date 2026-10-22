@@ -3,48 +3,41 @@
     "step": {
       "user": {
         "title": "Connect to INIM Prime",
-        "description": "Enter the connection details for your INIM PrimeX panel.",
+        "description": "Enter the address and LAN password of your INIM PrimeX panel.",
         "data": {
           "name": "Name",
           "host": "Host",
-          "port": "Port",
-          "apikey": "API key",
-          "use_https": "Use HTTPS",
           "local_6004_password": "Panel LAN password"
         },
         "data_description": {
           "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\").",
-          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Required: read over the local protocol (TCP 6004) for multi-active scenes and the precise model. PrimeX/Prime 4.x and 5.00 are supported natively; other firmware runs cgi-only (areas, zones, scenarios, outputs and states only)."
+          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Home Assistant talks to the panel only over its local protocol (TCP 6004); PrimeX/Prime firmware 4.x and 5.00 are supported."
         }
       },
       "reauth_confirm": {
         "title": "Reauthenticate INIM Prime",
-        "description": "The panel at {host} rejected the stored API key. Enter a valid API key to continue.",
+        "description": "The panel at {host} could not be read with the stored LAN password. Enter the panel's LAN password to continue.",
         "data": {
-          "apikey": "API key"
+          "local_6004_password": "Panel LAN password"
         }
       },
       "reconfigure": {
         "title": "Reconfigure INIM Prime",
-        "description": "Update the connection details for your INIM PrimeX panel. Use this to rotate the API key or move the panel to a new address without removing the integration.",
+        "description": "Update the name, address or LAN password of your INIM PrimeX panel without removing the integration.",
         "data": {
           "name": "Name",
           "host": "Host",
-          "port": "Port",
-          "apikey": "API key",
-          "use_https": "Use HTTPS",
           "local_6004_password": "Panel LAN password"
         },
         "data_description": {
           "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\").",
-          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Required: read over the local protocol (TCP 6004) for multi-active scenes and the precise model. PrimeX/Prime 4.x and 5.00 are supported natively; other firmware runs cgi-only (areas, zones, scenarios, outputs and states only)."
+          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Home Assistant talks to the panel only over its local protocol (TCP 6004); PrimeX/Prime firmware 4.x and 5.00 are supported."
         }
       }
     },
     "error": {
-      "invalid_auth": "Invalid API key.",
-      "cannot_connect": "Failed to connect to the panel.",
-      "local_cannot_connect": "Could not reach the panel's local protocol (TCP 6004). Check the LAN password and that the panel is reachable.",
+      "cannot_connect": "Could not read the panel over its local protocol (TCP 6004). Check the address, the LAN password and that the panel is reachable.",
+      "unsupported_firmware": "This panel firmware is not supported: its memory map is not known. PrimeX/Prime firmware 4.x and 5.00 are supported.",
       "unknown": "Unexpected error."
     },
     "abort": {
@@ -57,23 +50,17 @@
     "step": {
       "init": {
         "title": "INIM Prime options",
-        "description": "Tune the polling intervals and enable push mode to receive realtime local webhook events from the panel. The webhook URL is shown in a notification after saving.",
+        "description": "Choose the areas to show, how zones are labelled and grouped, and enable push mode to receive realtime local webhook events from the panel. The webhook URL is shown in a notification after saving.",
         "data": {
           "areas": "Areas to show",
-          "scan_interval_idle": "Idle poll interval (seconds)",
-          "scan_interval_active": "Active poll interval (seconds)",
           "webhook_enabled": "Enable realtime push (local webhook)",
           "label_language": "Zone label language (for icon guessing)",
-          "group_by_room": "Group zones by room",
-          "native_area_poll": "Fast area and zone polling (native protocol)",
-          "native_commands": "Native commands (arm/disarm, bypass, outputs)"
+          "group_by_room": "Group zones by room"
         },
         "data_description": {
           "areas": "Panel areas that get entities in Home Assistant (alarm panel, alarm memory, clear button). The choice is kept by area number, so renaming an area on the panel keeps it. Unselected areas get no entities (existing ones are removed) but still work in scenarios and commands. Areas added on the panel later stay hidden until you select them here.",
           "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language.",
-          "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area.",
-          "native_area_poll": "Read the arm/disarm state of every area and the state of every zone every 2 seconds over the panel's native TCP 6004 protocol (read-only, ~10 ms per read). The slower cgi poll keeps running for everything else.",
-          "native_commands": "Send arm/disarm, scenarios, zone bypass, outputs and alarm-memory reset over the panel's native TCP 6004 protocol instead of the cgi. On by default (verified live on PrimeX 4.07 and 5.00); turn it off to route commands over the cgi. A command is retried over the cgi only when it certainly never reached the panel."
+          "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area."
         }
       }
     }
@@ -85,15 +72,6 @@
       },
       "open_zone_count": {
         "name": "Open zones"
-      },
-      "api_version": {
-        "name": "API version"
-      },
-      "api_connections": {
-        "name": "API connections"
-      },
-      "api_last_ip": {
-        "name": "Last API client"
       }
     },
     "binary_sensor": {
@@ -153,17 +131,11 @@
     }
   },
   "exceptions": {
-    "output_code_not_allowed": {
-      "message": "Output control requires the panel Code to be configured."
-    },
     "zones_not_ready": {
       "message": "The command was rejected because one or more zones are not ready (open or in fault)."
     },
     "command_failed": {
       "message": "The panel command failed: {error}"
-    },
-    "invalid_scenario": {
-      "message": "Unknown scenario: {option}"
     },
     "forced_arm_bad_target": {
       "message": "Entity {entity_id} is not an INIM Prime entity."
@@ -194,6 +166,9 @@
     },
     "bypass_not_applied": {
       "message": "The panel did not apply the bypass change for zone {zone}."
+    },
+    "scenario_not_supported": {
+      "message": "This scenario cannot be applied: it has no single target mode per area, or the panel has areas beyond the ones a scenario definition covers."
     }
   },
   "selector": {

@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import EntityCategory, UnitOfElectricPotential
+from homeassistant.const import UnitOfElectricPotential
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
@@ -31,7 +31,6 @@ class InimSensorEntityDescription(SensorEntityDescription):
     """Describes an INIM Prime sensor entity."""
 
     value_fn: Callable[[InimData], StateType]
-    available_fn: Callable[[InimData], bool] = lambda _: True
 
 
 SENSORS: tuple[InimSensorEntityDescription, ...] = (
@@ -50,34 +49,6 @@ SENSORS: tuple[InimSensorEntityDescription, ...] = (
         value_fn=lambda data: sum(
             1 for zone in data.zones if zone.state is ZoneState.ALARM
         ),
-    ),
-    InimSensorEntityDescription(
-        key="api_version",
-        translation_key="api_version",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        # The cgi ``version`` field is the local API version (e.g. 1.0.1), NOT
-        # the panel firmware — exposed here, correctly labelled, so it is no
-        # longer mistaken for the firmware (which is the device's sw_version).
-        value_fn=lambda data: data.version.version,
-    ),
-    InimSensorEntityDescription(
-        key="api_connections",
-        translation_key="api_connections",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: (
-            data.api_stats.connections if data.api_stats is not None else None
-        ),
-        available_fn=lambda data: data.api_stats is not None,
-    ),
-    InimSensorEntityDescription(
-        key="api_last_ip",
-        translation_key="api_last_ip",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: (
-            data.api_stats.last_ip if data.api_stats is not None else None
-        ),
-        available_fn=lambda data: data.api_stats is not None,
     ),
 )
 
@@ -116,10 +87,3 @@ class InimSensor(CoordinatorEntity[InimDataUpdateCoordinator], SensorEntity):
     def native_value(self) -> StateType:
         """Return the current value."""
         return self.entity_description.value_fn(self.coordinator.data)
-
-    @property
-    def available(self) -> bool:
-        """Return whether the entity is available."""
-        return super().available and self.entity_description.available_fn(
-            self.coordinator.data
-        )

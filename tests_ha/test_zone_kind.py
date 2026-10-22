@@ -57,23 +57,16 @@ def test_unread_kind_fields_are_not_hints() -> None:
 
 
 @pytest.mark.parametrize(
-    "local_config",
-    [
-        None,
-        SimpleNamespace(structure=None),
-        SimpleNamespace(structure=Local6004Structure(zones=None)),
-        SimpleNamespace(structure=Local6004Structure(zones=[_PLAIN])),
-    ],
+    "structure",
+    [Local6004Structure(zones=None), Local6004Structure(zones=[_PLAIN])],
 )
-def test_native_zone_missing(local_config) -> None:  # noqa: ANN001
-    coordinator = SimpleNamespace(local_config=local_config)
+def test_native_zone_missing(structure: Local6004Structure) -> None:
+    coordinator = SimpleNamespace(structure=structure)
     assert native_zone(coordinator, 3) is None  # type: ignore[arg-type]
 
 
 def test_native_zone_found() -> None:
-    coordinator = SimpleNamespace(
-        local_config=SimpleNamespace(structure=Local6004Structure(zones=[_PLAIN]))
-    )
+    coordinator = SimpleNamespace(structure=Local6004Structure(zones=[_PLAIN]))
     assert native_zone(coordinator, 7) is _PLAIN  # type: ignore[arg-type]
 
 

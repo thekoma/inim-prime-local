@@ -7,7 +7,7 @@
 #   docker compose up homeassistant      # real HA server with the integration mounted (interactive E2E)
 #
 # Switch HA versions:  HA_VERSION=2025.12.0 docker compose build
-# Panel creds come from the repo .env (gitignored): INIM_HOST, INIM_PORT, INIM_APIKEY, INIM_USE_HTTPS
+# Panel creds come from the repo .env (gitignored): INIM_HOST, INIM_LOCAL_PASSWORD
 
 x-test-build: &test-build
   build:

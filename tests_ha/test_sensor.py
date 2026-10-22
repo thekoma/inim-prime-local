@@ -3,49 +3,40 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
-import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.inim_prime.client import (
-    ApiStats,
     Fault,
-    Scenario,
+    NativeZoneStatus,
     Version,
     Zone,
     ZoneState,
 )
+from custom_components.inim_prime.const import DOMAIN
 from custom_components.inim_prime.coordinator import InimData
 from custom_components.inim_prime.sensor import SENSORS, InimSensor
 
 
-def _build_data(
-    *,
-    api_stats: ApiStats | None = None,
-    zones: list[Zone] | None = None,
-    scenarios: list[Scenario] | None = None,
-    fault: Fault | None = None,
-) -> InimData:
+def _build_data(*, zones: list[Zone] | None = None, fault: Fault | None = None) -> InimData:
     """Build a sample InimData payload."""
     return InimData(
-        version=Version(version="1.0.1", verhttp="1.0.0", primex="4.07 PX500", servizio=False),
+        version=Version(raw="4.07 PX500", service=False),
         areas=[],
         zones=zones if zones is not None else [],
-        scenarios=scenarios if scenarios is not None else [],
+        scenarios=[],
         outputs=[],
-        fault=fault if fault is not None else Fault(vcc=13.7, raw_fau="0", has_faults=False),
-        api_stats=api_stats,
+        fault=fault if fault is not None else Fault(vcc=13.7, has_faults=False),
     )
 
 
 def _fake_coordinator(data: InimData) -> SimpleNamespace:
     """Return a minimal stand-in for the coordinator."""
     entry = SimpleNamespace(entry_id="abc123", title="INIM Prime")
-    return SimpleNamespace(
-        data=data,
-        config_entry=entry,
-        local_config=None,
-        last_update_success=True,
-    )
+    return SimpleNamespace(data=data, config_entry=entry, last_update_success=True)
 
 
 def _make_sensor(key: str, data: InimData) -> InimSensor:
@@ -55,12 +46,20 @@ def _make_sensor(key: str, data: InimData) -> InimSensor:
     return InimSensor(coordinator, coordinator.config_entry, description)  # type: ignore[arg-type]
 
 
+def _zone(zone_id: int, state: ZoneState) -> Zone:
+    return Zone(
+        id=zone_id,
+        label=f"Zone {zone_id}",
+        terminal=zone_id,
+        state=state,
+        alarm_memory=False,
+        excluded=False,
+    )
+
+
 def test_supply_voltage() -> None:
     """Supply voltage maps to fault.vcc with V unit and voltage device class."""
-    sensor = _make_sensor(
-        "supply_voltage",
-        _build_data(fault=Fault(vcc=12.3, raw_fau="0", has_faults=False)),
-    )
+    sensor = _make_sensor("supply_voltage", _build_data(fault=Fault(vcc=12.3, has_faults=False)))
     assert sensor.native_value == 12.3
     assert sensor.native_unit_of_measurement == "V"
     assert sensor.device_class == "voltage"
@@ -72,47 +71,18 @@ def test_supply_voltage() -> None:
 def test_open_zone_count() -> None:
     """Open-zone count is the number of zones in the ALARM state."""
     zones = [
-        Zone(
-            id=1, label="A", terminal=1, state=ZoneState.ALARM, alarm_memory=False, excluded=False
-        ),
-        Zone(
-            id=2, label="B", terminal=2, state=ZoneState.READY, alarm_memory=False, excluded=False
-        ),
-        Zone(
-            id=3, label="C", terminal=3, state=ZoneState.ALARM, alarm_memory=False, excluded=False
-        ),
-        Zone(
-            id=4, label="D", terminal=4, state=ZoneState.FAULT, alarm_memory=False, excluded=False
-        ),
+        _zone(1, ZoneState.ALARM),
+        _zone(2, ZoneState.READY),
+        _zone(3, ZoneState.ALARM),
+        _zone(4, ZoneState.FAULT),
     ]
     sensor = _make_sensor("open_zone_count", _build_data(zones=zones))
     assert sensor.native_value == 2
 
 
-def test_api_connections_with_stats() -> None:
-    """API connections is diagnostic, available, and reports the count."""
-    stats = ApiStats(api="primex", connections=7, last_connection="x", last_ip="192.0.2.9")
-    sensor = _make_sensor("api_connections", _build_data(api_stats=stats))
-    assert sensor.native_value == 7
-    assert sensor.entity_category == "diagnostic"
-    assert sensor.available is True
-
-
-def test_api_last_ip_with_stats() -> None:
-    """Last API IP is diagnostic and reports the address."""
-    stats = ApiStats(api="primex", connections=7, last_connection="x", last_ip="192.0.2.9")
-    sensor = _make_sensor("api_last_ip", _build_data(api_stats=stats))
-    assert sensor.native_value == "192.0.2.9"
-    assert sensor.entity_category == "diagnostic"
-    assert sensor.available is True
-
-
-@pytest.mark.parametrize("key", ["api_connections", "api_last_ip"])
-def test_api_sensors_unavailable_without_stats(key: str) -> None:
-    """Diagnostic API sensors are unavailable when api_stats is None."""
-    sensor = _make_sensor(key, _build_data(api_stats=None))
-    assert sensor.available is False
-    assert sensor.native_value is None
+def test_only_native_sensors() -> None:
+    """The cgi-only API sensors (version, connections, last client) are gone."""
+    assert {d.key for d in SENSORS} == {"supply_voltage", "open_zone_count"}
 
 
 def test_device_info_shared() -> None:
@@ -120,15 +90,33 @@ def test_device_info_shared() -> None:
     sensor = _make_sensor("supply_voltage", _build_data())
     assert sensor.device_info["identifiers"] == {("inim_prime", "abc123")}
     assert sensor.device_info["manufacturer"] == "INIM"
-    # model is the parsed variant (not the redundant "4.07 PX500"), firmware is
-    # the real panel firmware from primex, NOT the API version field (1.0.1).
+    # Model and firmware come from the native version string "4.07 PX500".
     assert sensor.device_info["model"] == "PX500"
     assert sensor.device_info["sw_version"] == "4.07"
     assert sensor.device_info["name"] == "INIM Prime"
 
 
-def test_api_version_sensor_reports_api_field() -> None:
-    """The API-version diagnostic sensor exposes the cgi 'version' (1.0.1)."""
-    sensor = _make_sensor("api_version", _build_data())
-    assert sensor.native_value == "1.0.1"
-    assert sensor.entity_description.entity_category is not None
+async def test_setup_reads_the_live_values(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    patch_client: AsyncMock,
+    zone_statuses: dict[int, NativeZoneStatus],
+    make_system_status,
+) -> None:
+    """End to end: the sensors follow the native system and zone statuses."""
+    patch_client.async_get_system_status.return_value = make_system_status(supply=24.3)
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    entry_id = mock_config_entry.entry_id
+    supply = registry.async_get_entity_id("sensor", DOMAIN, f"{entry_id}_sensor_supply_voltage")
+    open_zones = registry.async_get_entity_id("sensor", DOMAIN, f"{entry_id}_sensor_open_zone_count")
+    assert hass.states.get(supply).state == "24.3"
+    assert hass.states.get(open_zones).state == "0"
+
+    zone_statuses[1] = NativeZoneStatus(state=ZoneState.ALARM, excluded=False, alarm_memory=False)
+    await mock_config_entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(open_zones).state == "1"

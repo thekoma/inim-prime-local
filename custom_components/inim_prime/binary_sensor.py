@@ -70,13 +70,11 @@ async def async_setup_entry(
         for area in coordinator.data.areas:
             if area_shown(hass, entry, area):
                 _add(InimAreaAlarmMemoryBinarySensor(coordinator, area.id))
-        # Multi-active scene sensors, enabled by default. Computed from the 6004
+        # Multi-active scene sensors, enabled by default. Computed from the
         # scenario definitions vs live area state, so several scenes can read
-        # "on" at once — the accurate view the panel's single ``st`` flag cannot
-        # give. The 6004 channel is mandatory, so local_config is always present.
-        if coordinator.local_config is not None:
-            for scene in coordinator.local_config.scenes:
-                _add(InimSceneActiveBinarySensor(coordinator, scene.id))
+        # "on" at once.
+        for scene in coordinator.local_config.scenes:
+            _add(InimSceneActiveBinarySensor(coordinator, scene.id))
 
         if new_entities:
             async_add_entities(new_entities)
@@ -267,9 +265,8 @@ class InimSceneActiveBinarySensor(InimBaseBinarySensor):
     """A RUNNING binary sensor: on when this scenario's arming is active now.
 
     Computed from the scenario's static partition->mode definition (read once
-    over the read-only TCP 6004 channel) compared against live cgi area state,
-    so MULTIPLE scenarios can read "on" at the same time — the accurate
-    multi-active view the panel's single ``st`` flag cannot provide.
+    over TCP 6004) compared against the live area modes, so MULTIPLE scenarios
+    can read "on" at the same time.
     """
 
     _attr_device_class = BinarySensorDeviceClass.RUNNING
@@ -285,7 +282,7 @@ class InimSceneActiveBinarySensor(InimBaseBinarySensor):
 
     @property
     def _scenario(self) -> Scenario | None:
-        """Return the matching cgi scenario (for its live label), or None."""
+        """Return the matching scenario (for its live label), or None."""
         for scenario in self.coordinator.data.scenarios:
             if scenario.id == self._scene_id:
                 return scenario
@@ -307,10 +304,8 @@ class InimSceneActiveBinarySensor(InimBaseBinarySensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Expose the scenario's target partition modes (by area label)."""
-        config = self.coordinator.local_config
-        if config is None:
-            return None
-        scene = next((s for s in config.scenes if s.id == self._scene_id), None)
+        scenes = self.coordinator.local_config.scenes
+        scene = next((s for s in scenes if s.id == self._scene_id), None)
         if scene is None:
             return None
         labels = {area.id: area.label for area in self.coordinator.data.areas}

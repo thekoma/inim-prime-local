@@ -6,15 +6,6 @@
       },
       "open_zone_count": {
         "default": "mdi:door-open"
-      },
-      "api_version": {
-        "default": "mdi:api"
-      },
-      "api_connections": {
-        "default": "mdi:lan-connect"
-      },
-      "api_last_ip": {
-        "default": "mdi:ip-network"
       }
     },
     "binary_sensor": {
