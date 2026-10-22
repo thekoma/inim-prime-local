@@ -191,6 +191,9 @@
     },
     "native_command_uncertain": {
       "message": "The native command may have reached the panel, but its outcome is unknown ({error}). It was not retried; check the panel state before trying again."
+    },
+    "bypass_not_applied": {
+      "message": "The panel did not apply the bypass change for zone {zone}."
     }
   },
   "selector": {

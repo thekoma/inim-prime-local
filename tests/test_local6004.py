@@ -339,6 +339,8 @@ async def test_async_read_config_success(monkeypatch: pytest.MonkeyPatch) -> Non
     assert window.is_fire and not window.is_interior
     assert hall.is_shutter and hall.is_interior and hall.is_fault_zone
     assert not hall.is_shock and not hall.is_hold_up and not hall.has_chime
+    assert window.bypassable and m.NativeZoneDef(9, "X", 9, (0,)).bypassable
+    assert not replace(window, options=0x04).bypassable
     # "Scenario 2" is scenario 1's default; "Scenario 9" on scenario 2 is not
     assert st.scenarios == [m.NativeObject(0, "Away"), m.NativeObject(2, "Scenario 9")]
     assert st.outputs == [m.NativeObject(1005, "Siren"), m.NativeObject(1007, "Box")]

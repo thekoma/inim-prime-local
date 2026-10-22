@@ -1,7 +1,7 @@
 """Switch platform for the INIM Prime integration.
 
 Exposes one switch per panel output (relay control) and one bypass switch per
-zone (zone exclusion). Output control on a panel without the "Code" configured
+zone (zone exclusion), except for zones programmed "Non escludibile". Output control on a panel without the "Code" configured
 returns ``CODE_NOT_ALLOWED`` (status 8); that case is surfaced as a
 ``HomeAssistantError`` without flipping the optimistic state.
 """
@@ -14,6 +14,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -29,6 +30,7 @@ from .device import (
     room_device_info,
 )
 from .room_guess import guess_room
+from .zone_kind import native_zone
 
 # Output/bypass toggles issue panel writes; the cgi is single-threaded, so
 # serialize commands to one in flight at a time.
@@ -49,6 +51,19 @@ async def async_setup_entry(
     """
     coordinator = entry.runtime_data.coordinator
 
+    def _bypassable(zone_id: int) -> bool:
+        native = native_zone(coordinator, zone_id)
+        return native is None or native.bypassable
+
+    # A "Non escludibile" zone cannot be bypassed: it gets no bypass switch, and
+    # loses one created before its programming was known.
+    for zone in coordinator.data.zones:
+        if not _bypassable(zone.id):
+            registry = er.async_get(hass)
+            uid = f"{entry.entry_id}_zone_bypass_{zone.id}"
+            if (entity_id := registry.async_get_entity_id("switch", DOMAIN, uid)) is not None:
+                registry.async_remove(entity_id)
+
     # A single per-panel preference switch (not backed by panel data).
     async_add_entities([InimForceArmSwitch(coordinator)])
 
@@ -66,6 +81,8 @@ async def async_setup_entry(
             known.add(uid)
             new_entities.append(entity)
         for zone in coordinator.data.zones:
+            if not _bypassable(zone.id):
+                continue
             entity = InimZoneBypassSwitch(coordinator, entry, zone.id)
             uid = entity.unique_id
             if uid is None or uid in known:

@@ -766,6 +766,11 @@ class NativeZoneDef:
     sensor: int | None = None
 
     @property
+    def bypassable(self) -> bool:
+        """False for a "Non escludibile" zone (True while the options are unknown)."""
+        return not (self.options or 0) & ZONE_OPT_UNBYPASSABLE
+
+    @property
     def is_shutter(self) -> bool:
         """Roller-shutter detector ("Tapparella")."""
         return self.sensor == SENSOR_SHUTTER

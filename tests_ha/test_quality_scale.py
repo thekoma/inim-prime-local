@@ -65,6 +65,7 @@ _EXPECTED_SENSOR_KEYS = {
 _EXPECTED_BINARY_SENSOR_KEYS = {"system_fault", "shutter", *FAULT_FLAG_KEYS}
 _EXPECTED_EXCEPTION_KEYS = {
     "output_code_not_allowed",
+    "bypass_not_applied",
     "zones_not_ready",
     "command_failed",
     "invalid_scenario",

@@ -191,6 +191,9 @@
     },
     "native_command_uncertain": {
       "message": "Il comando nativo potrebbe aver raggiunto la centrale, ma l'esito è sconosciuto ({error}). Non è stato ripetuto; controlla lo stato della centrale prima di riprovare."
+    },
+    "bypass_not_applied": {
+      "message": "La centrale non ha applicato la modifica del bypass per la zona {zone}."
     }
   },
   "selector": {
