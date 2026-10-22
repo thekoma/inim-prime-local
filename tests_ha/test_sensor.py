@@ -156,6 +156,13 @@ def test_battery_sensors() -> None:
     assert resistance.device_class is None
 
 
+def test_display_precision() -> None:
+    """Voltages show one decimal (13.4 V, not 13 V); temperature and resistance are whole numbers."""
+    precision = {d.key: d.suggested_display_precision for d in SENSORS}
+    assert precision["supply_voltage"] == precision["battery_voltage"] == 1
+    assert precision["battery_temperature"] == precision["battery_resistance"] == 0
+
+
 def test_battery_values_not_read_yet() -> None:
     """Before the power values are read, temperature and resistance are unknown."""
     data = _build_data()

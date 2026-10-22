@@ -49,6 +49,7 @@ SENSORS: tuple[InimSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.VOLTAGE,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
         value_fn=lambda data: data.fault.vcc,
     ),
     InimSensorEntityDescription(
@@ -57,6 +58,7 @@ SENSORS: tuple[InimSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.VOLTAGE,
         native_unit_of_measurement=UnitOfElectricPotential.VOLT,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
         value_fn=lambda data: data.power.battery_voltage,
     ),
     InimSensorEntityDescription(
@@ -65,6 +67,7 @@ SENSORS: tuple[InimSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data.power.battery_temperature,
     ),
@@ -74,6 +77,7 @@ SENSORS: tuple[InimSensorEntityDescription, ...] = (
         # Home Assistant has no resistance device class.
         native_unit_of_measurement="mΩ",
         state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data.power.battery_resistance,
     ),
