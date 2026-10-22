@@ -9,9 +9,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .areas import area_shown
 from .client import ApiStatus, Area, InimApiError, InimConnectionError, Scenario
 from .commands import async_apply_scenario, async_clear_alarm_memory
-from .const import DOMAIN, is_factory_default_area
+from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
 from .forced_arm import async_force_arm
@@ -29,7 +30,8 @@ async def async_setup_entry(
     """Set up the INIM Prime button entities.
 
     Buttons are added dynamically via a coordinator listener so areas appearing
-    after setup get a clear-alarm-memory button without a reload.
+    after setup get a clear-alarm-memory button without a reload. Only the areas
+    the area selection shows get one (see areas.py).
     """
     coordinator = entry.runtime_data.coordinator
     known: set[str] = set()
@@ -47,7 +49,8 @@ async def async_setup_entry(
             new_entities.append(entity)
 
         for area in coordinator.data.areas:
-            _add(InimClearAlarmMemoryButton(coordinator, area))
+            if area_shown(hass, entry, area):
+                _add(InimClearAlarmMemoryButton(coordinator, area))
         # One "apply scenario" button per scenario, replacing the old single
         # active-scenario select (which couldn't express multi-active state).
         for scenario in coordinator.data.scenarios:
@@ -75,10 +78,6 @@ class InimClearAlarmMemoryButton(
         super().__init__(coordinator)
         self._area_id = area.id
         self._last_label = area.label
-        # Hide unused, factory-default areas ("AREA 006"..) by default. Gating
-        # is fixed at add time from the label the area first had.
-        if is_factory_default_area(area.label):
-            self._attr_entity_registry_enabled_default = False
         entry = coordinator.config_entry
         self._attr_unique_id = f"{entry.entry_id}_button_{area.id}"
         self._attr_device_info = panel_device_info(coordinator)

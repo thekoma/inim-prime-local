@@ -14,6 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .areas import area_shown
 from .client import (
     ApiStatus,
     Area,
@@ -24,7 +25,7 @@ from .client import (
     InimConnectionError,
 )
 from .commands import async_arm_area
-from .const import DOMAIN, is_factory_default_area
+from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
 
@@ -50,7 +51,8 @@ async def async_setup_entry(
     Areas are added dynamically: a coordinator listener reconciles the set of
     entities against ``coordinator.data.areas`` on every update, so areas that
     appear after setup (e.g. a panel-side reconfiguration) show up without a
-    reload. Removed areas are not deleted from the registry; their entity simply
+    reload. Only the areas the area selection shows get an entity (see areas.py).
+    Removed areas are not deleted from the registry; their entity simply
     reports ``available = False`` (see :class:`InimAlarmControlPanel`).
     """
     coordinator = entry.runtime_data.coordinator
@@ -58,9 +60,11 @@ async def async_setup_entry(
 
     @callback
     def _sync() -> None:
-        """Add an entity for every area id not yet known."""
+        """Add an entity for every shown area id not yet known."""
         new_entities: list[InimAlarmControlPanel] = []
         for area in coordinator.data.areas:
+            if not area_shown(hass, entry, area):
+                continue
             entity = InimAlarmControlPanel(coordinator, area.id)
             uid = entity.unique_id
             if uid is None or uid in known:
@@ -97,12 +101,7 @@ class InimAlarmControlPanel(
         entry = coordinator.config_entry
         self._attr_unique_id = f"{entry.entry_id}_area_{area_id}"
         self._attr_device_info = panel_device_info(coordinator)
-        label = self._area.label if self._area else None
-        self._last_label = label
-        # Hide unused, factory-default areas ("AREA 006"..) by default. The
-        # gating is fixed at add time from the label the area first had.
-        if label is not None and is_factory_default_area(label):
-            self._attr_entity_registry_enabled_default = False
+        self._last_label = self._area.label if self._area else None
 
     @property
     def _area(self) -> Area | None:

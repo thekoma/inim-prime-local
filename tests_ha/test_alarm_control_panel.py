@@ -194,15 +194,9 @@ async def test_arm_calls_client_and_optimistic(
     entity.coordinator.async_request_refresh.assert_awaited_once()
 
 
-def test_factory_default_area_disabled_by_default(entity_factory) -> None:
-    """An unused factory-default area ("AREA 006") is hidden by default."""
-    entity = entity_factory(_area(AreaMode.DISARMED, label="AREA       006 "))
-    assert entity.entity_registry_enabled_default is False
-
-
-@pytest.mark.parametrize("label", ["Box", "Area 5"])
-def test_real_area_enabled_by_default(entity_factory, label: str) -> None:
-    """Used areas (real names and the manual "Area 5") stay enabled."""
+@pytest.mark.parametrize("label", ["AREA       006 ", "Box", "Area 5"])
+def test_area_entity_enabled_by_default(entity_factory, label: str) -> None:
+    """Whatever the label: the area selection, not the name, decides if it exists."""
     entity = entity_factory(_area(AreaMode.DISARMED, label=label))
     assert entity.entity_registry_enabled_default is True
 

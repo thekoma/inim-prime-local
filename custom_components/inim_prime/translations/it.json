@@ -59,6 +59,7 @@
         "title": "Opzioni INIM Prime",
         "description": "Regola gli intervalli di polling e abilita la modalità push per ricevere eventi realtime dalla centrale tramite webhook locale. L'URL del webhook viene mostrato in una notifica dopo il salvataggio.",
         "data": {
+          "areas": "Aree da mostrare",
           "scan_interval_idle": "Intervallo di polling a riposo (secondi)",
           "scan_interval_active": "Intervallo di polling attivo (secondi)",
           "webhook_enabled": "Abilita push realtime (webhook locale)",
@@ -68,6 +69,7 @@
           "native_commands": "Comandi nativi (inserimento/disinserimento, bypass, uscite)"
         },
         "data_description": {
+          "areas": "Aree della centrale che hanno entità in Home Assistant (pannello allarme, memoria allarme, pulsante di reset). La scelta è legata al numero dell'area, quindi rinominare un'area in centrale non la cambia. Le aree non selezionate non hanno entità (quelle esistenti vengono rimosse) ma continuano a funzionare negli scenari e nei comandi. Le aree aggiunte in centrale in seguito restano nascoste finché non le selezioni qui.",
           "label_language": "Lingua usata per dedurre la device class (icona) di ogni zona dal nome. Auto segue la lingua di Home Assistant.",
           "group_by_room": "Mette ogni zona (e il suo switch di bypass) sotto un device per stanza, dedotta dal nome. Poi assegni ogni device-stanza a un'area di Home Assistant.",
           "native_area_poll": "Legge lo stato di inserimento di ogni area e lo stato di ogni zona ogni 2 secondi tramite il protocollo nativo TCP 6004 del pannello (sola lettura, ~10 ms a lettura). Il polling cgi più lento continua per tutto il resto.",

@@ -16,7 +16,15 @@
 | API key | `xxxxxxxx-…` | Generated in PrimeStudio |
 | Use HTTPS | unchecked | Only if the board has HTTPS enabled |
 
-On success you get one **device** with entities for every configured area, zone, scenario, output and the panel diagnostics. Unused factory-default areas and the output switches are created **disabled** — enable any you need from the device page.
+On success you get one **device** with entities for every area with a real name, every zone, scenario and output, and the panel diagnostics. Unused factory-default areas (`AREA 006`…) get no entities, and the output switches are created **disabled** — enable any you need from the device page.
+
+## Choosing which areas to show
+Open the integration → **Configure** and pick the panel areas under **Areas to show**. Each selected area gets an alarm panel, an alarm-memory sensor and a clear-memory button; an unselected one gets no entities at all (ones left from before are removed from the registry).
+
+- The choice is kept by **area number**, not by name: renaming an area on the panel keeps it, and the entity name follows the new label.
+- A hidden area still works: scenarios and commands that also set it run exactly as before, natively.
+- Until you save a choice, every area with a real name is shown. After that, an area added on the panel later stays hidden (with a warning in the log) until you select it.
+- Selecting an area again creates its entities afresh, without any custom name or room you had given them.
 
 ## Rotating the API key
 Generate a new key in PrimeStudio, then in Home Assistant open the integration → **⋮ → Reconfigure** and enter the new key (host/port/HTTPS can be changed here too). No need to delete and re-add.

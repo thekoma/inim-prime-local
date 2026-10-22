@@ -215,7 +215,7 @@ def test_area_alarm_memory_binary_sensor(coordinator: SimpleNamespace) -> None:
 
 
 def test_area_alarm_memory_enabled_default(inim_data: InimData) -> None:
-    """Factory-default areas are hidden by default; real ones stay enabled."""
+    """Enabled whatever the label: the area selection decides if it exists."""
     entry = SimpleNamespace(entry_id="abc123", title="INIM Prime")
     data = InimData(
         version=inim_data.version,
@@ -236,7 +236,7 @@ def test_area_alarm_memory_enabled_default(inim_data: InimData) -> None:
     factory = InimAreaAlarmMemoryBinarySensor(coordinator, 6)
     real = InimAreaAlarmMemoryBinarySensor(coordinator, 7)
 
-    assert factory.entity_registry_enabled_default is False
+    assert factory.entity_registry_enabled_default is True
     assert real.entity_registry_enabled_default is True
 
 

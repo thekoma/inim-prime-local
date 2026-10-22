@@ -75,6 +75,7 @@ async def test_async_setup_entry_creates_one_button_per_area(sample_version, two
     """One button entity is created per area."""
     coordinator = _make_coordinator(sample_version, two_areas)
     entry = MagicMock()
+    entry.options = {}
     entry.runtime_data.coordinator = coordinator
 
     added: list = []
@@ -102,8 +103,8 @@ def test_button_properties(sample_version, two_areas) -> None:
     assert device["name"] == "INIM Prime"
 
 
-def test_button_enabled_default_by_area_name(sample_version) -> None:
-    """Buttons for factory-default areas are hidden; real ones stay enabled."""
+def test_button_enabled_default_whatever_the_area_name(sample_version) -> None:
+    """Enabled whatever the label: the area selection decides if it exists."""
     areas = [
         Area(
             id=6,
@@ -125,7 +126,7 @@ def test_button_enabled_default_by_area_name(sample_version) -> None:
     factory_button = InimClearAlarmMemoryButton(coordinator, areas[0])
     real_button = InimClearAlarmMemoryButton(coordinator, areas[1])
 
-    assert factory_button.entity_registry_enabled_default is False
+    assert factory_button.entity_registry_enabled_default is True
     assert real_button.entity_registry_enabled_default is True
 
 
@@ -154,6 +155,7 @@ async def test_setup_creates_apply_button_per_scenario(sample_version, two_areas
     """An apply-scenario button is created for each scenario."""
     coordinator = _make_coordinator(sample_version, two_areas, _scenarios())
     entry = MagicMock()
+    entry.options = {}
     entry.runtime_data.coordinator = coordinator
 
     added: list = []

@@ -59,6 +59,7 @@
         "title": "INIM Prime options",
         "description": "Tune the polling intervals and enable push mode to receive realtime local webhook events from the panel. The webhook URL is shown in a notification after saving.",
         "data": {
+          "areas": "Areas to show",
           "scan_interval_idle": "Idle poll interval (seconds)",
           "scan_interval_active": "Active poll interval (seconds)",
           "webhook_enabled": "Enable realtime push (local webhook)",
@@ -68,6 +69,7 @@
           "native_commands": "Native commands (arm/disarm, bypass, outputs)"
         },
         "data_description": {
+          "areas": "Panel areas that get entities in Home Assistant (alarm panel, alarm memory, clear button). The choice is kept by area number, so renaming an area on the panel keeps it. Unselected areas get no entities (existing ones are removed) but still work in scenarios and commands. Areas added on the panel later stay hidden until you select them here.",
           "label_language": "Language used to guess each zone's device class (icon) from its name. Auto follows Home Assistant's language.",
           "group_by_room": "Place each zone (and its bypass switch) under a per-room device, guessed from the zone name. You then assign each room device to a Home Assistant area.",
           "native_area_poll": "Read the arm/disarm state of every area and the state of every zone every 2 seconds over the panel's native TCP 6004 protocol (read-only, ~10 ms per read). The slower cgi poll keeps running for everything else.",

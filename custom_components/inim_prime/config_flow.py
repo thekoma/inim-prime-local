@@ -18,6 +18,7 @@ from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -26,8 +27,10 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
+from .areas import default_area_selection
 from .client import (
     ApiStatus,
+    Area,
     InimApiError,
     InimConnectionError,
     InimPrimeClient,
@@ -36,6 +39,8 @@ from .client import (
 )
 from .const import (
     CONF_APIKEY,
+    CONF_AREAS,
+    CONF_AREAS_OFFERED,
     CONF_GROUP_BY_ROOM,
     CONF_LABEL_LANGUAGE,
     CONF_LOCAL_PASSWORD,
@@ -248,9 +253,15 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         options = dict(self.config_entry.options)
+        areas = _panel_areas(self.config_entry)
 
         if user_input is not None:
             new_options = {**options, **user_input}
+            if CONF_AREAS in user_input:
+                # Remember what was offered, so an area added on the panel later
+                # is told apart from one deselected here (see areas.py).
+                new_options[CONF_AREAS] = sorted(user_input[CONF_AREAS], key=int)
+                new_options[CONF_AREAS_OFFERED] = [str(area.id) for area in areas]
 
             if user_input.get(CONF_WEBHOOK_ENABLED):
                 # Generate the secret once and keep it stable across edits.
@@ -274,10 +285,35 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
 
             return self.async_create_entry(data=new_options)
 
+        schema: dict[vol.Marker, Any] = {}
+        if areas:
+            # Offered only while the entry is loaded: the area list comes from
+            # the running coordinator. Ids not on the panel any more are dropped.
+            offered = {str(area.id) for area in areas}
+            selected = options.get(
+                CONF_AREAS, default_area_selection(self.hass, self.config_entry, areas)
+            )
+            schema[
+                vol.Optional(CONF_AREAS, default=[key for key in selected if key in offered])
+            ] = SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(
+                            value=str(area.id),
+                            label=" ".join(area.label.split()) or str(area.id + 1),
+                        )
+                        for area in areas
+                    ],
+                    multiple=True,
+                    mode=SelectSelectorMode.LIST,
+                )
+            )
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    **schema,
                     vol.Required(
                         CONF_SCAN_INTERVAL_IDLE,
                         default=options.get(CONF_SCAN_INTERVAL_IDLE, DEFAULT_SCAN_INTERVAL_IDLE),
@@ -317,3 +353,11 @@ class InimPrimeOptionsFlow(OptionsFlowWithReload):
                 }
             ),
         )
+
+
+def _panel_areas(entry: InimConfigEntry) -> list[Area]:
+    """Return the panel areas of a loaded entry, or [] while it is not loaded."""
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is None or runtime.coordinator.data is None:
+        return []
+    return list(runtime.coordinator.data.areas)

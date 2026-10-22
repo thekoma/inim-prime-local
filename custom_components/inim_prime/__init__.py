@@ -12,6 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
+from .areas import async_sync_area_registry, async_track_unselected_areas
 from .client import InimPrimeClient, Local6004Client, Local6004Error
 from .const import (
     CONF_APIKEY,
@@ -123,6 +124,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
                     cancel_on_shutdown=True,
                 )
             )
+
+    # Apply the area selection before any platform adds entities: drop the
+    # entities of areas that are not shown, and warn about panel areas added
+    # after the selection was saved (they stay hidden until selected).
+    async_sync_area_registry(hass, entry, coordinator.data.areas)
+    entry.async_on_unload(async_track_unselected_areas(entry, coordinator))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
