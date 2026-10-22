@@ -2,14 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.inim_prime.const import is_factory_default_area
 
@@ -32,9 +25,9 @@ def test_is_factory_default_area_matches(label: str) -> None:
     "label",
     [
         "Area 5",  # manually set title-case -> used
-        "Box",
-        "Esterno",
-        "Appartam.Giorno",
+        "Garage",
+        "Outdoor",
+        "Day Zone",
         "",
         "AREA",  # no number
         "AREA 006 extra",  # trailing text -> fullmatch fails

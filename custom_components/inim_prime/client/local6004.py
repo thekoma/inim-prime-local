@@ -1,15 +1,16 @@
 """Client for the INIM PrimeX local protocol (TCP 6004).
 
-A companion to the cgi HTTP client: read-only by default, with four opt-in
-write commands (see "Write commands" below). What the local protocol adds:
+The integration's only channel to the panel. What it reads and sends:
 
 * **static structure** — which partitions, zones, arming scenarios and outputs
-  exist, and their labels, read once at setup (see :class:`Local6004Structure`).
-  It also names the panel outputs correctly, which the cgi does not.
+  exist, their labels and the zones' programmed kind, read once at setup (see
+  :class:`Local6004Structure`), with the **zone -> area** mapping;
+* **live status** — partitions (op 6), terminals (op 7: zones and outputs) and
+  the panel-wide faults, tampers and voltages (op 0x0D), polled;
 * **multi-active scenes** — each arming scenario's per-partition target mode
   (``away``/``stay``/``disarm``); a scenario is "active" when every partition it
-  targets currently matches that mode (computed against live cgi area state).
-* **zone -> area** mapping.
+  targets currently matches that mode;
+* four **write commands** (see "Write commands" below) and the event log.
 
 Protocol (reverse-engineered + verified on a live capture; AES key = the panel
 LAN password): each frame is ``50 50 | CRC16-ARC(LE over [+4..end]) | flag(LE) |
@@ -19,7 +20,7 @@ context op-code; reads use op 0x11 (start) / 0x10 (continue) with
 
 ⚠️ Opcode allow-lists: this module only ever emits the two memory-read
 opcodes, the read-only *status* commands (op 6 partition statuses, op 7
-terminal statuses) and the four *write* commands below. It never builds a
+terminal statuses, op 0x0D system status) and the four *write* commands below. It never builds a
 memory-write/program frame (the same framing with another opcode — on a
 production panel a stray write could brick it). ``_read_cmd``,
 ``_status_cmd`` and ``_write_cmd`` each check their opcode against their own
@@ -27,7 +28,7 @@ literal allow-list and raise :class:`OpcodeNotAllowed` otherwise
 (:class:`ReadOnlyViolation` for the read-only ones; an explicit check, not an
 ``assert``, so ``python -O`` cannot drop it).
 
-Write commands (same source, not yet live-verified by this project): request
+Write commands (same source, verified live on PrimeX 4.07 and 5.00): request
 ``[op:4 LE][pin:6][data]``, where the PIN is one digit per byte padded with
 0xFF (``74 00 00 00 00 00`` = no PIN):
 
@@ -50,8 +51,9 @@ Live partition status (op 6) follows the command layout documented by
 Pitscheider's inim-prime-native (https://github.com/Pitscheider/inim-prime-native,
 GPL-3.0): request ``[op:4 LE][pin:6]`` (``74 00..`` = no PIN), response
 ``[header:18][3 bytes x 30 partitions]``; each record is
-``[alarm flags][AreaMode][0x10 configured | 0x01 alarm memory]``. It answers in
-~10 ms even when the cgi takes seconds, so it is the fast path for area state.
+``[state][AreaMode][flags]``, state 1 = alarm and 2 = sabotage, flags ``0x10``
+configured, ``0x01`` alarm memory and ``0x02`` sabotage memory. It answers in
+~10 ms.
 
 Live terminal status (op 7, same source) takes ``[start:2 LE][end:2 LE]``
 (end exclusive, at most 20 terminals) and answers ``[header:18][10 bytes x 20]``.
@@ -59,7 +61,7 @@ A record is ``[type][00][zone A: flags, 00, ZoneState, 00][zone B: ...]`` with
 type 0 = single zone, 3 = double zone, 1 = output, 4 = disabled; flags
 ``0x10`` = excluded (bypassed), ``0x01`` = alarm memory. Zone ``n`` (< 1005) is
 half A of terminal ``n``; zone ``n + 1005`` is half B of terminal ``n`` (verified
-against the cgi on a PrimeX).
+on a live PrimeX 4.07).
 
 The static structure uses the label tables and the zone-settings layout also
 documented by Pitscheider's library: 16-byte ASCII label records per
@@ -76,13 +78,12 @@ Firmware 5.00 (PrimeX/Prime, verified read-only on a live panel in October
 2026) keeps the framing, the crypto, the version read and the live status and
 write commands, but answers with the ``50 54`` preamble and moves most config
 tables. Its map is :data:`_LAYOUT_50X`: area and zone label tables are
-unchanged, the scenario-mode, scenario-label and output-label tables moved, and
-the half-B zone id and the output terminals shifted from ``+1005`` to ``+1505``
-(zone ids 1005+ are the new CoreSync video zones). The zone->area settings and
-the event-log offsets are not mapped for 5.x yet, so those two degrade (cgi
-zones, no event log) while scenes, labels, live status and commands work. A
-firmware whose major digit is not in :data:`_LAYOUTS` is read for its version
-only (``layout_ok=False``) and the caller then runs cgi-only.
+unchanged, the scenario-mode, scenario-label, output-label, zone-settings and
+zone-kind tables moved, and the half-B zone id and the output terminals shifted
+from ``+1005`` to ``+1505`` (zone ids 1005+ are the new CoreSync video zones).
+The event-log offset is not mapped for 5.x yet, so there is no event log there.
+A firmware whose major digit is not in :data:`_LAYOUTS` is read for its version
+only (``layout_ok=False``) and is not supported.
 """
 
 from __future__ import annotations
@@ -98,6 +99,7 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .const import AreaMode, ZoneState
+from .models import FAULT_FLAG_KEYS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -124,6 +126,9 @@ _STATUS_HEADER = 18
 _PARTITION_REC = 3
 _PARTITION_COUNT = 30
 _PARTITION_CONFIGURED = 0x10
+# Partition record byte 0 (Prime/STUDIO Comm::AreeRealTime).
+_AREA_STATE_ALARM = 1
+_AREA_STATE_SABOTAGE = 2
 _CLOSE_TIMEOUT = 1.0
 
 # Read-only status command: live terminal (zone) statuses.
@@ -150,9 +155,15 @@ STRUCTURE_TIMEOUT = 30.0
 # Failures of a best-effort structure step: that object kind is then unknown.
 _STEP_ERRORS = (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError)
 
+# Read-only system status (libdriver "read_status"): faults, panel flags and the
+# supply voltages; Prime/STUDIO polls it about once a second while monitoring.
+_OP_SYSTEM_STATUS = 0x0D
 # The only status (read-only command) opcodes ever sent. Literal, so a renamed
 # or mistyped constant above cannot widen it.
-_STATUS_OPS = frozenset({6, 7})
+_STATUS_OPS = frozenset({6, 7, 0x0D})
+# What precedes a status command's own data: the no-PIN marker for the live
+# partition and terminal status, a single 0x00 for the system status.
+_STATUS_PREFIX = {6: _NO_PIN, 7: _NO_PIN, 0x0D: b"\x00"}
 
 # Write commands (Pitscheider's CommandOperation). Sent only by the
 # async_set_*/async_reset_* methods, which the integration calls only when the
@@ -259,7 +270,7 @@ class _Layout:
     map, the zone kinds and the event log are then unavailable, while the rest of the native channel
     (live area/zone status, scenes, labels) still works. ``native_writes_ok`` is
     False for a family whose write-command responses have not been verified on a
-    live panel; the integration then keeps commands on the cgi for that family.
+    live panel; the integration then refuses commands on that family.
     """
 
     name: str
@@ -332,11 +343,11 @@ _LAYOUT_50X = _Layout(
     native_writes_ok=True,
 )
 # Panel firmware major digit -> memory map. A firmware not listed is read for its
-# version only (layout_ok False) and the integration then runs cgi-only.
+# version only (layout_ok False) and the integration does not support it.
 _LAYOUTS: dict[str, _Layout] = {"4": _LAYOUT_40X, "5": _LAYOUT_50X}
 
 # Factory-default scenario names carry their 1-based index: "Scenario 10" or
-# "SCENARIO   031". Unused scenarios keep them; the cgi does not list those.
+# "SCENARIO   031". Unused scenarios keep them and are not listed.
 _FACTORY_SCENARIO_RE = re.compile(r"(?:Scenario|SCENARIO)\s+(\d+)")
 
 # Scenario MODO nibble bits -> live AreaMode they require.
@@ -423,7 +434,7 @@ def _status_cmd(op: int, data: bytes = b"") -> bytes:
     """Build a read-only status command body (no PIN)."""
     if op not in _STATUS_OPS:
         raise ReadOnlyViolation(f"status opcode {op}")
-    return op.to_bytes(4, "little") + _NO_PIN + data
+    return op.to_bytes(4, "little") + _STATUS_PREFIX[op] + data
 
 
 def encode_pin(pin: str | None) -> bytes:
@@ -571,11 +582,11 @@ def decode_configured_partitions(resp: bytes) -> list[int]:
 def zone_candidates(
     terminal_types: dict[int, int], half_offset: int = SECOND_HALF_ZONE_OFFSET
 ) -> list[int]:
-    """Return the zone ids the terminal types allow, in the cgi's order.
+    """Return the zone ids the terminal types allow, in terminal order.
 
     A single-zone terminal holds zone ``n`` (half A); a double-zone terminal
     also holds ``n + 1005`` (half B). Outputs, disabled and unknown terminals
-    hold no zone. The order (terminal, then half) matches the cgi listing.
+    hold no zone. The order is terminal, then half.
     """
     zones: list[int] = []
     for terminal in sorted(t for t in terminal_types if t < half_offset):
@@ -653,6 +664,7 @@ class NativeAreaStatus:
     mode: AreaMode
     alarm: bool
     alarm_memory: bool
+    sabotage: bool = False
 
 
 def decode_partition_statuses(resp: bytes) -> dict[int, NativeAreaStatus]:
@@ -662,9 +674,11 @@ def decode_partition_statuses(resp: bytes) -> dict[int, NativeAreaStatus]:
     mode byte are skipped. A response shorter than the documented header plus
     all records raises ``ValueError`` rather than yielding partial data.
 
-    ``alarm`` comes from the active alarm flag (record byte 0) only; the
-    retained memory bit (byte 2) never makes an area read as alarming by
-    itself. Memory is set whenever either bit is set.
+    Record byte 0 is the partition's live state as Prime/STUDIO reads it
+    (``Comm::AreeRealTime``): 1 = in alarm, 2 = sabotage. ``alarm`` counts only
+    while the partition is armed; the retained memory bit (byte 2, bit 0) never
+    makes an area read as alarming by itself, and memory is set whenever either
+    says so. Sabotage is reported whatever the arming state.
     """
     size = _PARTITION_REC * _PARTITION_COUNT
     if len(resp) < _STATUS_HEADER + size:
@@ -679,12 +693,100 @@ def decode_partition_statuses(resp: bytes) -> dict[int, NativeAreaStatus]:
             mode = AreaMode(mode_byte)
         except ValueError:
             continue
-        active = bool(flags & 0x01)
+        active = flags == _AREA_STATE_ALARM
         out[area_id] = NativeAreaStatus(
             mode=mode,
             alarm=active and mode is not AreaMode.DISARMED,
             alarm_memory=active or bool(status & 0x01),
+            sabotage=flags == _AREA_STATE_SABOTAGE,
         )
+    return out
+
+
+# System status (op 0x0D) reply, after the 4-byte echo: a 6-byte fault word, the
+# panel flags, then the supply voltages in tenths of a volt. Bits as Prime/STUDIO
+# shows them (Living_Monitoring_NEW::AggiornaPagina_Guasti) and as the panel's own
+# fault string table orders them (libdriver); keys are the integration's fault
+# flags (FAULT_FLAG_KEYS).
+_SYSTEM_STATUS_LEN = 4 + 54
+_SYSTEM_FAULT_WORD = 6
+_SYSTEM_FAULT_BITS: dict[str, tuple[int, int]] = {
+    "low_battery": (0, 2),
+    "fault_mains": (0, 3),
+    "no_phone_line": (0, 4),
+    "jam_radio": (0, 5),
+    "low_battery_wls": (0, 6),
+    "disappearance_wls": (0, 7),
+    "fault_gsm": (1, 0),
+    "sensor_dirty": (1, 2),
+    "zone_fault": (1, 3),
+    "sirens": (1, 5),
+    "power_supply": (1, 6),
+    "radio_keypads": (1, 7),
+    "tamper": (2, 5),
+    "comm_internet": (2, 6),
+}
+# Tampers the panel also reports one by one (panel dislodged and opened,
+# readers, keypads, expansions): any of them raises "tamper" too.
+_SYSTEM_TAMPER_BITS = ((6, 0), (6, 1), (10, 6), (10, 7), (11, 0))
+_SYSTEM_SERVICE = (6, 3)  # the SERV jumper: panel in service
+_SYSTEM_PROGRAMMING = (6, 4)
+_SYSTEM_SUPPLY_V = 16  # switching supply output
+_SYSTEM_BATTERY_V = 18
+
+
+@dataclass(frozen=True)
+class NativeSystemStatus:
+    """Panel-wide live status (op 0x0D): faults, tampers and supply voltages."""
+
+    faults: dict[str, bool]
+    has_faults: bool
+    supply_voltage: float
+    battery_voltage: float
+    service: bool
+    programming: bool
+    # The fault word and panel flags as read, for diagnostics.
+    raw: bytes
+
+
+def decode_system_status(resp: bytes) -> NativeSystemStatus:
+    """Decode a system-status (op 0x0D) response; a short one raises ``ValueError``."""
+    if len(resp) < _SYSTEM_STATUS_LEN:
+        raise ValueError(f"short system-status response ({len(resp)} bytes)")
+    d = resp[4:_SYSTEM_STATUS_LEN]
+
+    def bit(pos: tuple[int, int]) -> bool:
+        return bool(d[pos[0]] >> pos[1] & 1)
+
+    faults = {name: bit(pos) for name, pos in _SYSTEM_FAULT_BITS.items()}
+    faults["tamper"] = faults["tamper"] or any(bit(pos) for pos in _SYSTEM_TAMPER_BITS)
+    return NativeSystemStatus(
+        faults={key: faults[key] for key in FAULT_FLAG_KEYS},
+        has_faults=any(d[:_SYSTEM_FAULT_WORD]) or faults["tamper"],
+        supply_voltage=int.from_bytes(d[_SYSTEM_SUPPLY_V : _SYSTEM_SUPPLY_V + 2], "little") / 10,
+        battery_voltage=int.from_bytes(d[_SYSTEM_BATTERY_V : _SYSTEM_BATTERY_V + 2], "little")
+        / 10,
+        service=bit(_SYSTEM_SERVICE),
+        programming=bit(_SYSTEM_PROGRAMMING),
+        raw=bytes(d[:12]),
+    )
+
+
+def decode_output_states(resp: bytes, start: int, end: int) -> dict[int, int]:
+    """Decode a terminal-status response for ``[start, end)`` into ``{terminal: value}``.
+
+    Only output terminals yield a value: record byte 1, 0 when the output is off
+    and above 0 when it is on (Prime/STUDIO Living_Monitoring_NEW::
+    DeterminaStatoUscita). A short response raises ``ValueError``.
+    """
+    count = end - start
+    if len(resp) < _STATUS_HEADER + count * _TERMINAL_REC:
+        raise ValueError(f"short terminal-status response ({len(resp)} bytes)")
+    out: dict[int, int] = {}
+    for idx in range(count):
+        rec = resp[_STATUS_HEADER + idx * _TERMINAL_REC : _STATUS_HEADER + (idx + 1) * _TERMINAL_REC]
+        if rec[0] == _TERMINAL_OUTPUT:
+            out[start + idx] = rec[1]
     return out
 
 
@@ -764,6 +866,11 @@ class NativeZoneDef:
     levels: tuple[int, int, int] | None = None
     terminal_type: int | None = None
     sensor: int | None = None
+
+    @property
+    def auto_bypass(self) -> bool:
+        """"Autoescludibile": the panel bypasses the zone itself when open at arming."""
+        return bool((self.options or 0) & ZONE_OPT_AUTO_BYPASS)
 
     @property
     def bypassable(self) -> bool:
@@ -874,7 +981,7 @@ def _decode_zones(
             if (prec := _record(kinds, "pulse", terminal, _PULSE_CFG_REC)) is not None:
                 zone = replace(zone, sensor=prec[_PULSE_SENSOR])
             zones.append(zone)
-    # Back to the cgi's order (terminal, then half).
+    # Back to terminal order (terminal, then half).
     order = {zid: pos for pos, zid in enumerate(candidates)}
     return sorted(zones, key=lambda z: order[z.id])
 
@@ -888,12 +995,11 @@ class Local6004Structure:
       B) and whose partition bitmask is non-zero;
     * scenarios: arming scenarios whose label is not the factory default;
     * outputs: panel output terminals (1005..1009) of the output type, keyed
-      by terminal id, which is also the id the cgi uses.
+      by terminal id.
 
-    On a live PrimeX 4.07 this reproduces the cgi's area, zone and scenario
-    sets and labels exactly. A kind is None when its read failed (e.g. a
-    panel variant rejecting part of the terminal scan): the cgi's list is then
-    used for that kind.
+    On a live PrimeX 4.07 this reproduces the panel's own area, zone and
+    scenario lists and labels exactly. A kind is None when its read failed
+    (e.g. a panel variant rejecting part of the terminal scan).
     """
 
     areas: list[NativeObject] | None = None
@@ -907,11 +1013,11 @@ class Local6004Config:
     """Static config read once from the panel over TCP 6004 (read-only)."""
 
     firmware: str
-    layout_ok: bool  # offsets valid (firmware major == 4 / 40x layout)
+    layout_ok: bool  # offsets valid (the firmware family is in _LAYOUTS)
     scenes: list[SceneDef] = field(default_factory=list)
     zone_areas: dict[int, list[int]] = field(default_factory=dict)
     # None when it could not be read (unsupported layout, or the structure
-    # read failed): the cgi structure is then used as is.
+    # read failed).
     structure: Local6004Structure | None = None
 
 
@@ -1073,34 +1179,58 @@ class Local6004Client:
         """Whether native write commands are verified for this panel's firmware.
 
         False on a family whose write-command response is not yet verified on a
-        live panel (e.g. 5.00): the caller keeps commands on the cgi.
+        live panel: commands are then refused.
         """
         return self._layout.native_writes_ok
+
+    async def _live[T](self, step: Awaitable[T], timeout: float) -> T:
+        """Run one live status read under the status lock and its own budget.
+
+        A failure closes the persistent connection (the next read reopens it)
+        and is raised as :class:`Local6004Error`.
+        """
+        async with self._status_lock:
+            try:
+                return await asyncio.wait_for(step, timeout)
+            except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as err:
+                await self._close_status_conn()
+                raise Local6004Error(str(err) or type(err).__name__) from err
 
     async def async_get_area_statuses(
         self, timeout: float = STATUS_TIMEOUT
     ) -> dict[int, NativeAreaStatus]:
         """Return live partition statuses over a persistent connection (read-only)."""
-        async with self._status_lock:
-            try:
-                return await asyncio.wait_for(self._get_area_statuses(), timeout)
-            except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as err:
-                await self._close_status_conn()
-                raise Local6004Error(str(err) or type(err).__name__) from err
+        return await self._live(self._get_area_statuses(), timeout)
 
     async def _get_area_statuses(self) -> dict[int, NativeAreaStatus]:
         return decode_partition_statuses(await self._status(_status_cmd(_OP_PARTITION_STATUS)))
+
+    async def async_get_system_status(self, timeout: float = STATUS_TIMEOUT) -> NativeSystemStatus:
+        """Return the live system status: faults, tampers, supply voltages (read-only)."""
+        return await self._live(self._get_system_status(), timeout)
+
+    async def _get_system_status(self) -> NativeSystemStatus:
+        return decode_system_status(await self._status(_status_cmd(_OP_SYSTEM_STATUS)))
+
+    async def async_get_output_states(
+        self, terminals: set[int], timeout: float = STATUS_TIMEOUT
+    ) -> dict[int, int]:
+        """Return the live value of the output ``terminals`` (0 = off, read-only)."""
+        return await self._live(self._get_output_states(terminals), timeout)
+
+    async def _get_output_states(self, terminals: set[int]) -> dict[int, int]:
+        out: dict[int, int] = {}
+        for start, end in terminal_chunks(terminals):
+            data = start.to_bytes(2, "little") + end.to_bytes(2, "little")
+            resp = await self._status(_status_cmd(_OP_TERMINAL_STATUS, data))
+            out |= decode_output_states(resp, start, end)
+        return {terminal: value for terminal, value in out.items() if terminal in terminals}
 
     async def async_get_zone_statuses(
         self, zone_ids: set[int], timeout: float = STATUS_TIMEOUT
     ) -> dict[int, NativeZoneStatus]:
         """Return live statuses for ``zone_ids`` over the persistent connection."""
-        async with self._status_lock:
-            try:
-                return await asyncio.wait_for(self._get_zone_statuses(zone_ids), timeout)
-            except (TimeoutError, OSError, ValueError, asyncio.IncompleteReadError) as err:
-                await self._close_status_conn()
-                raise Local6004Error(str(err) or type(err).__name__) from err
+        return await self._live(self._get_zone_statuses(zone_ids), timeout)
 
     async def _get_zone_statuses(self, zone_ids: set[int]) -> dict[int, NativeZoneStatus]:
         half = self._layout.half_offset
@@ -1273,8 +1403,7 @@ class Local6004Client:
         The firmware and scenario definitions are required: a failure raises
         :class:`Local6004Error`. The structure is best effort, per object kind
         and outside that budget: it covers the whole terminal range, verified
-        on one firmware only, so a failed step leaves its kinds None and the
-        caller keeps the cgi's list for them.
+        on one firmware only, so a failed step leaves its kinds None.
         """
         try:
             config = await asyncio.wait_for(self._read_config(), self._timeout)
@@ -1317,7 +1446,7 @@ class Local6004Client:
         layout = _LAYOUTS.get(firmware[:1])
         if layout is None:
             # Known-reachable panel, but its config memory map is not mapped:
-            # the caller runs cgi-only (see _async_setup_local).
+            # the panel is not supported.
             return Local6004Config(firmware=firmware, layout_ok=False)
         self._layout = layout
 
@@ -1344,7 +1473,7 @@ class Local6004Client:
         area_ids = await self._best_effort(self._scan_partitions())
         terminal_types = await self._best_effort(self._scan_terminals())
         # The zone->area settings offset is only known for some layouts; without
-        # it zones fall back to the cgi (the native zone *status* still works).
+        # it no zone is decoded (the native zone *status* still works).
         decode_zones = layout.zone_cfg is not None
         candidates = (
             zone_candidates(terminal_types, layout.half_offset)
@@ -1440,7 +1569,7 @@ class Local6004Client:
         """Return every terminal's type (read-only status commands, no context op).
 
         Any failed or short chunk fails the whole scan: a partial zone list
-        would be worse than falling back to the cgi's.
+        would be worse than none.
         """
         count = self._layout.terminal_count
         chunks = [

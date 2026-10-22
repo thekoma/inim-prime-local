@@ -53,22 +53,15 @@ def test_strings_en_identical() -> None:
 
 
 # Expected translated entity keys per platform/domain.
-_EXPECTED_SENSOR_KEYS = {
-    "supply_voltage",
-    "open_zone_count",
-    "api_version",
-    "api_connections",
-    "api_last_ip",
-}
+_EXPECTED_SENSOR_KEYS = {"supply_voltage", "open_zone_count"}
 # "shutter": a roller-shutter zone keeps its label as name, but takes the
 # shutter icons through this translation key (no shutter binary-sensor class).
 _EXPECTED_BINARY_SENSOR_KEYS = {"system_fault", "shutter", *FAULT_FLAG_KEYS}
 _EXPECTED_EXCEPTION_KEYS = {
-    "output_code_not_allowed",
     "bypass_not_applied",
     "zones_not_ready",
     "command_failed",
-    "invalid_scenario",
+    "scenario_not_supported",
     "forced_arm_bad_target",
     "forced_arm_single_target",
     "forced_arm_mode_with_scenario",
@@ -91,6 +84,26 @@ def test_entity_translations_present(name: str) -> None:
     for domain_block in entity.values():
         for entry in domain_block.values():
             assert entry["name"]
+
+
+_EXPECTED_CONFIG_ERRORS = {"cannot_connect", "unsupported_firmware", "unknown"}
+
+
+@pytest.mark.parametrize("name", ["strings.json", "translations/en.json", "translations/it.json"])
+def test_config_translations_are_native_only(name: str) -> None:
+    """The config steps ask only for the name, host and LAN password."""
+    config = _load(name)["config"]
+    assert set(config["error"]) == _EXPECTED_CONFIG_ERRORS
+    steps = config["step"]
+    assert set(steps["user"]["data"]) == {"name", "host", "local_6004_password"}
+    assert set(steps["reconfigure"]["data"]) == {"name", "host", "local_6004_password"}
+    assert set(steps["reauth_confirm"]["data"]) == {"local_6004_password"}
+    assert set(_load(name)["options"]["step"]["init"]["data"]) == {
+        "areas",
+        "webhook_enabled",
+        "label_language",
+        "group_by_room",
+    }
 
 
 @pytest.mark.parametrize("name", ["strings.json", "translations/en.json", "translations/it.json"])

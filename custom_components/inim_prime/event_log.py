@@ -69,13 +69,7 @@ async def _handle_get_event_log(call: ServiceCall) -> ServiceResponse:
     entry = _resolve_entry(hass, entity_ids[0])
     runtime = entry.runtime_data
     coordinator = runtime.coordinator
-    local_client = runtime.local_client
-    if local_client is None:  # mandatory 6004 means this is set after setup
-        raise HomeAssistantError(
-            translation_domain=DOMAIN,
-            translation_key="command_failed",
-            translation_placeholders={"error": "local channel unavailable"},
-        )
+    local_client = runtime.client
 
     area_labels = {area.id: area.label for area in coordinator.data.areas}
     scenario_labels = {s.id: s.label for s in coordinator.data.scenarios}

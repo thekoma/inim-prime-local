@@ -14,7 +14,7 @@ LOGGER: Final = logging.getLogger(__package__)
 
 # Factory-default INIM area names look like "AREA       006 " (uppercase
 # literal "AREA" + whitespace + a number). Used areas have real, custom names
-# (e.g. "Box", "Appartam.Giorno") or a manually title-cased "Area 5". The match
+# (e.g. "Garage", "Day Zone") or a manually title-cased "Area 5". The match
 # is case-SENSITIVE so only the untouched factory pattern is treated as unused.
 _FACTORY_AREA_RE: Final = re.compile(r"AREA\s+\d+")
 
@@ -24,8 +24,8 @@ def is_factory_default_area(label: str) -> bool:
 
     Matches the case-sensitive uppercase pattern ``AREA\\s+\\d+`` against the
     stripped label (e.g. "AREA 006".."AREA 010") but not real names such as
-    "Box", "Esterno", "Appartam.Giorno", the manually set title-case "Area 5",
-    or an empty string.
+    "Garage", "Outdoor", "Day Zone", the manually set title-case "Area 5", or
+    an empty string.
     """
     return _FACTORY_AREA_RE.fullmatch(label.strip()) is not None
 
@@ -38,14 +38,9 @@ PLATFORMS: Final[list[Platform]] = [
     Platform.BUTTON,
 ]
 
-CONF_APIKEY: Final = "apikey"
-CONF_USE_HTTPS: Final = "use_https"
-
 # Realtime / push (local webhook) options.
 CONF_WEBHOOK_ENABLED: Final = "webhook_enabled"
 CONF_WEBHOOK_ID: Final = "webhook_id"
-CONF_SCAN_INTERVAL_IDLE: Final = "scan_interval_idle"
-CONF_SCAN_INTERVAL_ACTIVE: Final = "scan_interval_active"
 
 # Language used to guess zone device classes (icons) from labels. "auto" follows
 # the Home Assistant system language; otherwise an explicit ISO-639-1 code.
@@ -64,69 +59,39 @@ CONF_AREAS: Final = "areas"
 # afterwards can be told apart from one the owner deselected.
 CONF_AREAS_OFFERED: Final = "areas_offered"
 
-# Fast area-state polling over the native TCP 6004 status command (~10 ms per
-# read, vs seconds for the cgi on a loaded panel). The cgi poll stays on as
-# the full-state reconciliation path.
-CONF_NATIVE_AREA_POLL: Final = "native_area_poll"
-DEFAULT_NATIVE_AREA_POLL: Final = True
-# Seconds between native area-status reads.
-NATIVE_AREA_POLL_INTERVAL: Final = 2
-# After this many consecutive native failures, only retry every
-# NATIVE_AREA_BACKOFF_TICKS ticks so a dead channel is not hammered.
-NATIVE_AREA_FAILURES_BEFORE_BACKOFF: Final = 3
-# Resting cgi interval (seconds) while the native poll is healthy: the cgi then
-# only refreshes outputs, faults and diagnostics.
-NATIVE_CGI_INTERVAL: Final = 300
-NATIVE_AREA_BACKOFF_TICKS: Final = 15
-
-# Native write commands over TCP 6004 (arm/disarm, scenarios, zone bypass,
-# outputs, alarm-memory reset) instead of the cgi. Off by default: the command
-# layouts come from Pitscheider's library and have not been live-verified by
-# this project, so the owner opts in after testing (docs/native-commands.md).
-CONF_NATIVE_COMMANDS: Final = "native_commands"
-# Default: native write commands over TCP 6004 (verified live on PrimeX 4.07 and
-# 5.00). The owner wants native as the default path; the cgi stays the fallback.
-DEFAULT_NATIVE_COMMANDS: Final = True
-
-# Read-only local protocol (TCP 6004) — MANDATORY. Reads the static scenario
-# definitions (for accurate multi-active scene sensors the cgi cannot express),
-# zone->area, and the precise panel model. The password is the panel LAN password
-# (default "pass"), validated at config time; setup fails without it.
+# The panel's native protocol (TCP 6004) is the only channel: structure, live
+# state and commands. The password is the panel LAN password (default "pass"),
+# validated at config time; setup fails without it.
 CONF_LOCAL_PASSWORD: Final = "local_6004_password"
 DEFAULT_LOCAL_PASSWORD: Final = "pass"
 LOCAL_6004_PORT: Final = 6004
-
-DEFAULT_PORT: Final = 8080
-DEFAULT_SCAN_INTERVAL: Final = 15
-DEFAULT_USE_HTTPS: Final = False
 # Friendly name for the panel; used as the config-entry title and the device
-# name (so entities read e.g. "Allarme Finestra Camera", not the panel IP).
+# name (so entities read e.g. "Alarm Front Door", not the panel IP).
 DEFAULT_NAME: Final = "INIM Prime"
 
-# Adaptive two-tier polling defaults (seconds).
-DEFAULT_SCAN_INTERVAL_IDLE: Final = 30
-DEFAULT_SCAN_INTERVAL_ACTIVE: Final = 1
-# How long (seconds) to stay in the fast/active tier after an event.
-DEFAULT_ACTIVE_WINDOW: Final = 20
-
-# Overload / timeout hardening (seconds, except the failure count).
-# Per-cgi-request ceiling used by the polling client (a full cycle issues
-# several sequential reads, so this is well under DEFAULT_CYCLE_TIMEOUT).
-DEFAULT_REQUEST_TIMEOUT: Final = 5
-# Hard ceiling for an entire update cycle; a cycle that exceeds this is aborted
-# and reported as UpdateFailed so it can never run away or pile up. Real panels
-# can take ~1 s per read under load (~7 s per cycle), so leave generous headroom.
+# Seconds between live-state reads (a handful of ~10 ms status commands).
+NATIVE_POLL_INTERVAL: Final = 2
+# Seconds between reads once FAILURES_BEFORE_BACKOFF cycles in a row failed, so
+# a panel that stopped answering is not hammered.
+NATIVE_BACKOFF_INTERVAL: Final = 30
+# Hard ceiling for one read cycle; a cycle that exceeds it is aborted and
+# reported as failed, so it can never run away or pile up.
 DEFAULT_CYCLE_TIMEOUT: Final = 20
-# Consecutive failed cycles after which fast polling is suspended and the
-# coordinator backs off to the idle tier.
+# Consecutive failed cycles after which the reads slow down.
 FAILURES_BEFORE_BACKOFF: Final = 3
 # Consecutive failed cycles tolerated (serving the last good snapshot) before
-# entities are marked unavailable. A single slow/timed-out cycle is common on a
-# loaded panel and must not flap every entity to ``unavailable``.
+# entities are marked unavailable, so one slow answer does not flap every entity.
 FAILURES_BEFORE_UNAVAILABLE: Final = 3
-# How often (seconds) the diagnostic ``get_status_api`` read is refreshed. Its
-# values barely change, so it is not worth one extra cgi read every cycle.
-API_STATS_REFRESH_INTERVAL: Final = 600
+
+# Keys of the cgi-era config entries (version 1), dropped by the migration.
+LEGACY_DATA_KEYS: Final = ("apikey", "port", "use_https", "scan_interval")
+LEGACY_OPTION_KEYS: Final = (
+    "scan_interval",
+    "scan_interval_idle",
+    "scan_interval_active",
+    "native_area_poll",
+    "native_commands",
+)
 
 # Panel event names carried in the webhook query/body (see design doc §2.3).
 EV_ZONE_OPEN: Final = "zone_open"

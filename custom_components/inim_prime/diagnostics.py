@@ -8,10 +8,10 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_APIKEY, CONF_WEBHOOK_ID
+from .const import CONF_LOCAL_PASSWORD, CONF_WEBHOOK_ID
 from .coordinator import InimConfigEntry
 
-TO_REDACT = {CONF_APIKEY, CONF_WEBHOOK_ID}
+TO_REDACT = {CONF_LOCAL_PASSWORD, CONF_WEBHOOK_ID}
 
 
 async def async_get_config_entry_diagnostics(

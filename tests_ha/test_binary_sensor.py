@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.inim_prime.binary_sensor import (
     InimAreaAlarmMemoryBinarySensor,
@@ -19,12 +23,15 @@ from custom_components.inim_prime.client import (
     AreaMode,
     AreaState,
     Fault,
+    Local6004Config,
+    Local6004Structure,
+    NativeZoneStatus,
     Scenario,
     Version,
     Zone,
     ZoneState,
 )
-from custom_components.inim_prime.const import CONF_GROUP_BY_ROOM, CONF_LABEL_LANGUAGE
+from custom_components.inim_prime.const import CONF_GROUP_BY_ROOM, CONF_LABEL_LANGUAGE, DOMAIN
 from custom_components.inim_prime.coordinator import InimData
 from custom_components.inim_prime.device import label_language
 
@@ -54,7 +61,7 @@ def _area(area_id: int, label: str, *, alarm_memory: bool) -> Area:
 def inim_data() -> InimData:
     """Return a sample InimData."""
     return InimData(
-        version=Version(version="4.07", verhttp="1.0", primex="4.07 PX500", servizio=False),
+        version=Version(raw="4.07 PX500", service=False),
         areas=[
             _area(1, "Ground", alarm_memory=True),
             _area(2, "Upstairs", alarm_memory=False),
@@ -71,9 +78,13 @@ def inim_data() -> InimData:
             Scenario(id=1, label="Arm away", active=False),
         ],
         outputs=[],
-        fault=Fault(vcc=13.7, raw_fau="0", has_faults=False),
-        api_stats=None,
+        fault=Fault(vcc=13.7, has_faults=False),
     )
+
+
+def _local_config() -> Local6004Config:
+    """A static config without zone definitions: zone kinds come from labels."""
+    return Local6004Config(firmware="4.07 PX500", layout_ok=True)
 
 
 @pytest.fixture
@@ -89,7 +100,8 @@ def coordinator(inim_data: InimData) -> SimpleNamespace:
         data=inim_data,
         config_entry=entry,
         hass=hass,
-        local_config=None,
+        local_config=_local_config(),
+        structure=Local6004Structure(),
         last_update_success=True,
     )
 
@@ -173,7 +185,8 @@ def test_zone_grouping_disabled_uses_panel_device(inim_data: InimData) -> None:
         data=inim_data,
         config_entry=entry,
         hass=SimpleNamespace(config=SimpleNamespace(language="it")),
-        local_config=None,
+        local_config=_local_config(),
+        structure=Local6004Structure(),
         last_update_success=True,
     )
     zone = InimZoneBinarySensor(coord, 1)  # "Porta ingresso"
@@ -195,8 +208,7 @@ def test_fault_binary_sensor(coordinator: SimpleNamespace) -> None:
         zones=coordinator.data.zones,
         scenarios=[],
         outputs=[],
-        fault=Fault(vcc=11.2, raw_fau="4", has_faults=True),
-        api_stats=None,
+        fault=Fault(vcc=11.2, has_faults=True),
     )
     assert fault.is_on is True
     assert fault.extra_state_attributes == {"vcc": 11.2}
@@ -227,10 +239,9 @@ def test_area_alarm_memory_enabled_default(inim_data: InimData) -> None:
         scenarios=[],
         outputs=[],
         fault=inim_data.fault,
-        api_stats=None,
     )
     coordinator = SimpleNamespace(
-        data=data, config_entry=entry, local_config=None, last_update_success=True
+        data=data, config_entry=entry, local_config=_local_config(), last_update_success=True
     )
 
     factory = InimAreaAlarmMemoryBinarySensor(coordinator, 6)
@@ -260,12 +271,69 @@ def test_fault_flag_binary_sensor(coordinator: SimpleNamespace) -> None:
         zones=coordinator.data.zones,
         scenarios=coordinator.data.scenarios,
         outputs=[],
-        fault=Fault(
-            vcc=11.2,
-            raw_fau="4",
-            has_faults=True,
-            flags={"low_battery": True},
-        ),
-        api_stats=None,
+        fault=Fault(vcc=11.2, has_faults=True, flags={"low_battery": True}),
     )
     assert sensor.is_on is True
+
+
+def test_zone_missing_from_the_data(coordinator: SimpleNamespace) -> None:
+    """A zone sensor whose zone is gone is unavailable and reports nothing."""
+    zone = InimZoneBinarySensor(coordinator, 99)
+    assert zone.device_class is None
+    assert zone.available is False
+    assert zone.name is None
+    assert zone.is_on is None
+    assert zone.extra_state_attributes is None
+
+
+def test_area_alarm_memory_missing_area(coordinator: SimpleNamespace) -> None:
+    """An alarm-memory sensor whose area is gone keeps its last name, reports nothing."""
+    sensor = InimAreaAlarmMemoryBinarySensor(coordinator, 1)
+    assert sensor.available is True
+    coordinator.data = InimData(
+        version=coordinator.data.version,
+        areas=[],
+        zones=coordinator.data.zones,
+        scenarios=coordinator.data.scenarios,
+        outputs=[],
+        fault=coordinator.data.fault,
+    )
+    assert sensor.available is False
+    assert sensor.is_on is None
+    assert sensor.name == "Ground alarm memory"
+
+
+async def test_setup_creates_the_sensors_and_follows_the_zone(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    patch_client: AsyncMock,
+    zone_statuses: dict[int, NativeZoneStatus],
+    make_system_status,
+) -> None:
+    """End to end: zone, fault, alarm-memory and scene sensors follow the live reads."""
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    entry_id = mock_config_entry.entry_id
+
+    def _state(unique_id: str) -> str:
+        entity_id = registry.async_get_entity_id("binary_sensor", DOMAIN, f"{entry_id}_{unique_id}")
+        assert entity_id is not None, unique_id
+        return hass.states.get(entity_id).state
+
+    assert _state("zone_1") == "off"
+    assert _state("fault") == "off"
+    assert _state("area_memory_1") == "off"
+    assert _state("scene_1") == "on"
+    # The per-flag fault sensors exist (disabled by default, so no state).
+    assert registry.async_get_entity_id("binary_sensor", DOMAIN, f"{entry_id}_fault_tamper")
+
+    zone_statuses[1] = NativeZoneStatus(state=ZoneState.ALARM, excluded=False, alarm_memory=True)
+    patch_client.async_get_system_status.return_value = make_system_status(fault_mains=True)
+    await mock_config_entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert _state("zone_1") == "on"
+    assert _state("fault") == "on"

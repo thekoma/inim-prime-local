@@ -35,7 +35,7 @@ _SAMPLE_EVENTS = [
         "event": "Scenario",
         "partitions": [],
         "restoral": False,
-        "scenario": "Dis.Box",
+        "scenario": "Night",
     },
 ]
 
@@ -61,7 +61,7 @@ async def test_get_event_log_returns_decoded_events(
 ) -> None:
     """The action returns the decoded log; limit keeps the most recent N."""
     eid = await _setup(hass, mock_config_entry)
-    mock_config_entry.runtime_data.local_client.async_read_event_log = AsyncMock(
+    mock_config_entry.runtime_data.client.async_read_event_log = AsyncMock(
         return_value=list(_SAMPLE_EVENTS)
     )
 
@@ -74,7 +74,7 @@ async def test_get_event_log_limit_zero_returns_all(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, patch_client: AsyncMock
 ) -> None:
     eid = await _setup(hass, mock_config_entry)
-    mock_config_entry.runtime_data.local_client.async_read_event_log = AsyncMock(
+    mock_config_entry.runtime_data.client.async_read_event_log = AsyncMock(
         return_value=list(_SAMPLE_EVENTS)
     )
     result = await _call(hass, {"entity_id": eid, "limit": 0})
@@ -85,21 +85,12 @@ async def test_get_event_log_read_error_raises(
     hass: HomeAssistant, mock_config_entry: MockConfigEntry, patch_client: AsyncMock
 ) -> None:
     eid = await _setup(hass, mock_config_entry)
-    mock_config_entry.runtime_data.local_client.async_read_event_log = AsyncMock(
+    mock_config_entry.runtime_data.client.async_read_event_log = AsyncMock(
         side_effect=Local6004Error("down")
     )
     with pytest.raises(HomeAssistantError) as exc:
         await _call(hass, {"entity_id": eid})
     assert exc.value.translation_key == "command_failed"
-
-
-async def test_get_event_log_missing_local_client(
-    hass: HomeAssistant, mock_config_entry: MockConfigEntry, patch_client: AsyncMock
-) -> None:
-    eid = await _setup(hass, mock_config_entry)
-    mock_config_entry.runtime_data.local_client = None
-    with pytest.raises(HomeAssistantError):
-        await _call(hass, {"entity_id": eid})
 
 
 async def test_get_event_log_bad_target(

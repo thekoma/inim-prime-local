@@ -858,3 +858,155 @@ async def test_zone_statuses_error_closes(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(m.Local6004Error, match="short"):
         await client.async_get_zone_statuses({0})
     assert client._status_conn is None
+
+
+def test_decode_partition_statuses_sabotage() -> None:
+    header = bytes(m._STATUS_HEADER)
+    data = bytearray(m._PARTITION_REC * m._PARTITION_COUNT)
+    data[0:3] = b"\x02\x04\x12"  # area 0: disarmed, sabotage (state 2), sabotage memory
+    data[3:6] = b"\x02\x01\x10"  # area 1: armed away, sabotage
+    data[6:9] = b"\x01\x01\x10"  # area 2: armed away, alarm (state 1)
+    out = m.decode_partition_statuses(header + bytes(data))
+    assert out[0] == m.NativeAreaStatus(
+        mode=AreaMode.DISARMED, alarm=False, alarm_memory=False, sabotage=True
+    )
+    assert out[1] == m.NativeAreaStatus(
+        mode=AreaMode.TOTAL, alarm=False, alarm_memory=False, sabotage=True
+    )
+    assert out[2] == m.NativeAreaStatus(
+        mode=AreaMode.TOTAL, alarm=True, alarm_memory=True, sabotage=False
+    )
+
+
+async def test_zone_statuses_oserror_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_open(host: str, port: int):  # noqa: ANN202
+        raise OSError("unreachable")
+
+    monkeypatch.setattr(m.asyncio, "open_connection", fake_open)
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.Local6004Error, match="unreachable"):
+        await client.async_get_zone_statuses({0})
+    assert client._status_conn is None
+
+
+# --------------------------------------------------------------- system status
+def _system_data(**bits: tuple[int, int]) -> bytearray:
+    data = bytearray(54)
+    for byte, bit in bits.values():
+        data[byte] |= 1 << bit
+    return data
+
+
+def _system_resp(data: bytes, supply: int = 243, battery: int = 134) -> bytes:
+    data = bytearray(data)
+    data[m._SYSTEM_SUPPLY_V : m._SYSTEM_SUPPLY_V + 2] = supply.to_bytes(2, "little")
+    data[m._SYSTEM_BATTERY_V : m._SYSTEM_BATTERY_V + 2] = battery.to_bytes(2, "little")
+    return (~0x0D & 0xFFFFFFFF).to_bytes(4, "little") + bytes(data)
+
+
+def test_system_status_cmd_bytes() -> None:
+    assert m._status_cmd(0x0D) == b"\x0d\x00\x00\x00\x00"
+    assert m._STATUS_OPS == frozenset({6, 7, 0x0D})
+
+
+def test_decode_system_status_no_faults() -> None:
+    status = m.decode_system_status(_system_resp(bytes(54)))
+    assert status.faults == dict.fromkeys(m.FAULT_FLAG_KEYS, False)
+    assert not status.has_faults
+    assert status.supply_voltage == 24.3
+    assert status.battery_voltage == 13.4
+    assert not status.service
+    assert not status.programming
+    assert status.raw == bytes(12)
+
+
+@pytest.mark.parametrize("key", list(m._SYSTEM_FAULT_BITS))
+def test_decode_system_status_each_fault_bit(key: str) -> None:
+    status = m.decode_system_status(_system_resp(_system_data(f=m._SYSTEM_FAULT_BITS[key])))
+    assert {k for k, v in status.faults.items() if v} == {key}
+    assert status.has_faults
+    assert list(status.faults) == list(m.FAULT_FLAG_KEYS)
+
+
+@pytest.mark.parametrize("pos", m._SYSTEM_TAMPER_BITS)
+def test_decode_system_status_device_tamper_raises_tamper(pos: tuple[int, int]) -> None:
+    status = m.decode_system_status(_system_resp(_system_data(t=pos)))
+    assert {k for k, v in status.faults.items() if v} == {"tamper"}
+    assert status.has_faults
+
+
+def test_decode_system_status_unmapped_fault_bit_and_flags() -> None:
+    # Fault word bit 0 (zone fuse) has no flag of its own but is still a fault.
+    data = _system_data(fuse=(0, 0), serv=m._SYSTEM_SERVICE, prog=m._SYSTEM_PROGRAMMING)
+    status = m.decode_system_status(_system_resp(data))
+    assert not any(status.faults.values())
+    assert status.has_faults
+    assert status.service
+    assert status.programming
+    assert status.raw[0] == 0x01
+
+
+def test_decode_system_status_rejects_short_response() -> None:
+    with pytest.raises(ValueError, match="short"):
+        m.decode_system_status(bytes(4 + 53))
+
+
+async def test_system_status_over_the_persistent_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairs = _patch_sessions(monkeypatch, [[_resp(_system_resp(bytes(54), supply=137))]])
+    client = m.Local6004Client("host", "pass")
+    status = await client.async_get_system_status()
+    assert status.supply_voltage == 13.7
+    assert _decrypt(pairs[0][1].sent[0]) == b"\x0d\x00\x00\x00\x00"
+
+
+async def test_system_status_short_response_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sessions(monkeypatch, [[_resp(bytes(10))]])
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.Local6004Error, match="short"):
+        await client.async_get_system_status()
+    assert client._status_conn is None
+
+
+# --------------------------------------------------------------- output states
+def test_decode_output_states() -> None:
+    records = [
+        _term(1),  # t1005: output off
+        bytes([1, 3]) + bytes(8),  # t1006: output on (value 3)
+        _term(0, b"\x08\x00\x01\x00"),  # t1007: a zone -> skipped
+        _term(4),  # t1008: disabled -> skipped
+    ]
+    resp = bytes(m._STATUS_HEADER) + b"".join(records)
+    assert m.decode_output_states(resp, 1005, 1009) == {1005: 0, 1006: 3}
+    with pytest.raises(ValueError, match="short"):
+        m.decode_output_states(resp, 1005, 1010)
+
+
+async def test_output_states_chunks_and_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    resp = _terminal_resp([bytes([1, 1]) + bytes(8), _term(1), bytes([1, 2]) + bytes(8)])
+    pairs = _patch_sessions(monkeypatch, [[resp]])
+    client = m.Local6004Client("host", "pass")
+
+    out = await client.async_get_output_states({1505, 1507})
+
+    assert out == {1505: 1, 1507: 2}  # 1506 is read but not asked for
+    sent = _decrypt(pairs[0][1].sent[0])
+    assert sent[:4] == b"\x07\x00\x00\x00"
+    assert sent[-4:] == (1505).to_bytes(2, "little") + (1508).to_bytes(2, "little")
+
+
+async def test_output_states_error_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sessions(monkeypatch, [[_resp(bytes(m._STATUS_HEADER))]])
+    client = m.Local6004Client("host", "pass")
+    with pytest.raises(m.Local6004Error, match="short"):
+        await client.async_get_output_states({1005})
+    assert client._status_conn is None
+
+
+# --------------------------------------------------------------- zone kinds
+def test_zone_def_auto_bypass() -> None:
+    zone = m.NativeZoneDef(1, "Zone", 1, (0,))
+    assert not zone.auto_bypass  # options unknown
+    assert replace(zone, options=m.ZONE_OPT_AUTO_BYPASS).auto_bypass
+    assert not replace(zone, options=m.ZONE_OPT_INTERIOR).auto_bypass

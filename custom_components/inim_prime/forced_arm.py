@@ -6,22 +6,21 @@ scenario) even when zones are open, by bypassing the open zones first. The
 arm/select/button verb.
 
 Safety model:
-- **Fail closed by default**: if an open zone cannot be bypassed (panel rejects
-  it, e.g. an unbypassable zone), nothing is armed and the call raises, naming
-  the offending zones. ``allow_partial: true`` is an explicit opt-in to bypass
-  what is possible and arm anyway, always reporting what stayed open.
-- **Rollback**: a bypass that we applied is reverted if a later bypass, the
-  arm/apply, or the readiness check fails, so the panel is never left with zones
-  excluded but disarmed.
-- **Verified bypass**: we re-read the zones after writing, so a silently
-  ineffective bypass is classified as unbypassable rather than assumed applied.
+- **Fail closed by default**: if an open zone cannot be bypassed (programmed
+  "Non escludibile", or the panel does not apply the bypass), nothing is armed
+  and the call raises, naming the offending zones. ``allow_partial: true`` is
+  an explicit opt-in to bypass what is possible and arm anyway, always
+  reporting what stayed open.
+- **Rollback**: a bypass that we applied is reverted if a later bypass or the
+  arm fails before reaching the panel, so it is never left with zones excluded
+  but disarmed. After an arm whose outcome is uncertain the bypasses stay: the
+  panel may be armed, and re-including an open zone would trip it.
+- **Verified bypass**: the zones are read back after the bypasses, so a
+  silently ineffective one is classified as unbypassable rather than assumed.
 - **Never silent**: every forced arm fires an ``inim_prime_forced_arm`` event.
-- **cgi only**, even with native commands on: the open-zone check is the
-  cgi's ``get_*_nrz``, which knows which zones each arming mode and scenario
-  actually uses (a partial arm skips internal zones). The native zone state
-  has no such per-mode view, and mixing channels between the check, the
-  bypasses, the verification re-read and the rollback would make the
-  rollback reason about two sources of truth.
+- **The panel's own view**: the zones that matter are the ones the arming would
+  check (see :func:`commands.zones_to_check`: auto-bypass zones and, for
+  partial arming, interior zones are left out), read live natively.
 """
 
 from __future__ import annotations
@@ -40,8 +39,15 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 
-from .client import ApiStatus, ArmMode, InimApiError, InimConnectionError, OpenZone
-from .const import DOMAIN
+from .client import (
+    ArmMode,
+    Local6004Error,
+    NativeCommandError,
+    NativeCommandNotSent,
+    ZoneState,
+)
+from .commands import ARM_TO_AREA_MODE, scenario_modes, zones_to_check
+from .const import DOMAIN, LOGGER
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 
 SERVICE_ARM_FORCED = "arm_forced"
@@ -67,9 +73,18 @@ ARM_FORCED_SCHEMA = vol.Schema(
 )
 
 
-def _zone_list(zones: list[OpenZone]) -> list[dict[str, Any]]:
-    """Render open zones as response/event-friendly dicts."""
-    return [{"id": z.id, "label": z.label} for z in zones]
+def _error(key: str, **placeholders: str) -> HomeAssistantError:
+    return HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key=key,
+        translation_placeholders=placeholders or None,
+    )
+
+
+def _zone_list(coordinator: InimDataUpdateCoordinator, zone_ids: list[int]) -> list[dict[str, Any]]:
+    """Render zones as response/event-friendly dicts."""
+    labels = {zone.id: zone.label for zone in coordinator.data.zones}
+    return [{"id": zone_id, "label": labels.get(zone_id, str(zone_id))} for zone_id in zone_ids]
 
 
 def _resolve_entry(hass: HomeAssistant, entity_id: str) -> InimConfigEntry:
@@ -142,61 +157,13 @@ def _resolve_target(
     return entry, "area", area_id, mode
 
 
-async def _open_zones(
-    coordinator: InimDataUpdateCoordinator, kind: str, obj_id: int, mode: ArmMode | None
-) -> list[OpenZone]:
-    """Return the zones that are not ready (open) for the target."""
-    client = coordinator.client
-    if kind == "scenario":
-        return await client.get_scenario_open_zones(obj_id)
-    return await client.get_area_open_zones(obj_id, mode or ArmMode.TOTAL)
-
-
-async def _bypass_and_verify(
-    coordinator: InimDataUpdateCoordinator, open_zones: list[OpenZone]
-) -> tuple[list[OpenZone], list[OpenZone]]:
-    """Try to bypass every open zone, then verify which actually took.
-
-    Returns (bypassed, unbypassable). A zone is "unbypassable" if the write was
-    rejected or the re-read shows it is still not excluded.
-    """
-    client = coordinator.client
-    rejected: set[int] = set()
-    for zone in open_zones:
+async def _rollback(coordinator: InimDataUpdateCoordinator, zone_ids: list[int]) -> None:
+    """Re-include zones we bypassed (best effort)."""
+    for zone_id in zone_ids:
         try:
-            await client.set_zone_excluded(zone.id, True)
-        except InimApiError:
-            rejected.add(zone.id)
-    # Re-read to confirm the bypass actually applied (a rejected/no-op write
-    # leaves the zone not-excluded).
-    current = {z.id: z.excluded for z in await client.get_zones()}
-    bypassed = [z for z in open_zones if z.id not in rejected and current.get(z.id)]
-    unbypassable = [z for z in open_zones if z not in bypassed]
-    return bypassed, unbypassable
-
-
-async def _rollback(
-    coordinator: InimDataUpdateCoordinator, zones: list[OpenZone]
-) -> None:
-    """Re-include zones we previously bypassed (best effort)."""
-    for zone in zones:
-        try:
-            await coordinator.client.set_zone_excluded(zone.id, False)
-        except (InimApiError, InimConnectionError):
-            pass
-
-
-def _raise_command_error(err: Exception) -> None:
-    """Translate a panel write failure into a HomeAssistantError."""
-    if isinstance(err, InimApiError) and err.status == ApiStatus.ZONES_NOT_READY:
-        raise HomeAssistantError(
-            translation_domain=DOMAIN, translation_key="zones_not_ready"
-        ) from err
-    raise HomeAssistantError(
-        translation_domain=DOMAIN,
-        translation_key="command_failed",
-        translation_placeholders={"error": str(err)},
-    ) from err
+            await coordinator.client.async_set_zone_bypass(zone_id, False)
+        except NativeCommandError as err:
+            LOGGER.warning("Could not re-include zone %d after a forced arm: %s", zone_id, err)
 
 
 async def async_force_arm(
@@ -216,38 +183,74 @@ async def async_force_arm(
     raises. Always fires ``inim_prime_forced_arm``.
     """
     coordinator = entry.runtime_data.coordinator
-    bypassed: list[OpenZone] = []
-    unbypassable: list[OpenZone] = []
-    open_zones = await _open_zones(coordinator, kind, obj_id, mode)
-    if open_zones:
-        bypassed, unbypassable = await _bypass_and_verify(coordinator, open_zones)
-        if unbypassable and not allow_partial:
-            await _rollback(coordinator, bypassed)
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="forced_arm_unbypassable_zones",
-                translation_placeholders={
-                    "zones": ", ".join(z.label for z in unbypassable)
-                },
-            )
+    client = coordinator.client
+    if not client.supports_native_writes:
+        raise _error("command_failed", error="native commands are not verified on this firmware")
+    modes = (
+        scenario_modes(coordinator, obj_id)
+        if kind == "scenario"
+        else {obj_id: ARM_TO_AREA_MODE[mode or ArmMode.TOTAL]}
+    )
+    zone_defs = {zone.id: zone for zone in coordinator.structure.zones or []}
+    check = zones_to_check(zone_defs.values(), modes)
 
     try:
-        if kind == "scenario":
-            await coordinator.client.apply_scenario(obj_id)
-        else:
-            await coordinator.client.arm_area(obj_id, mode or ArmMode.TOTAL)
-    except (InimApiError, InimConnectionError) as err:
+        statuses = await client.async_get_zone_statuses(check) if check else {}
+        open_ids = sorted(
+            zone_id
+            for zone_id in check
+            if (status := statuses.get(zone_id)) is None
+            or (status.state is not ZoneState.READY and not status.excluded)
+        )
+        unbypassable = [zone_id for zone_id in open_ids if not zone_defs[zone_id].bypassable]
+        tried: list[int] = []
+        for zone_id in open_ids:
+            if zone_id in unbypassable:
+                continue
+            try:
+                await client.async_set_zone_bypass(zone_id, True)
+            except NativeCommandNotSent:
+                unbypassable.append(zone_id)
+                continue
+            except NativeCommandError:
+                pass  # it may have been applied: the read-back below decides
+            tried.append(zone_id)
+        # Read back: a bypass the panel did not apply leaves the zone open.
+        after = await client.async_get_zone_statuses(set(tried)) if tried else {}
+    except Local6004Error as err:
+        raise _error("command_failed", error=str(err)) from err
+    bypassed = [zone_id for zone_id in tried if (s := after.get(zone_id)) is not None and s.excluded]
+    unbypassable += [zone_id for zone_id in tried if zone_id not in bypassed]
+    unbypassable.sort()
+
+    if unbypassable and not allow_partial:
         await _rollback(coordinator, bypassed)
-        _raise_command_error(err)
+        labels = {zone.id: zone.label for zone in coordinator.data.zones}
+        raise _error(
+            "forced_arm_unbypassable_zones",
+            zones=", ".join(labels.get(zone_id, str(zone_id)) for zone_id in unbypassable),
+        )
+
+    try:
+        # The readiness was settled above: send without a second zone check.
+        await client.async_set_area_modes(modes)
+    except NativeCommandNotSent as err:
+        await _rollback(coordinator, bypassed)
+        raise _error("command_failed", error=str(err)) from err
+    except NativeCommandError as err:
+        # It may have armed: leave the bypasses (re-including an open zone of
+        # an armed area would trip it) and let the user check the panel.
+        await coordinator.async_refresh()
+        raise _error("native_command_uncertain", error=str(err)) from err
 
     result: dict[str, Any] = {
         "armed": True,
         "kind": kind,
-        "bypassed_zones": _zone_list(bypassed),
-        "unbypassable_zones": _zone_list(unbypassable),
+        "bypassed_zones": _zone_list(coordinator, bypassed),
+        "unbypassable_zones": _zone_list(coordinator, unbypassable),
     }
     hass.bus.async_fire(EVENT_FORCED_ARM, {"entry_id": entry.entry_id, **result})
-    await coordinator.async_request_refresh()
+    await coordinator.async_refresh()
     return result
 
 

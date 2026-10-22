@@ -22,10 +22,7 @@ from .zone_guess import guess_device_class
 
 def native_zone(coordinator: InimDataUpdateCoordinator, zone_id: int) -> NativeZoneDef | None:
     """Return the zone's native definition, when the structure read provided it."""
-    config = coordinator.local_config
-    structure = config.structure if config is not None else None
-    zones = structure.zones if structure is not None else None
-    return next((zone for zone in zones or [] if zone.id == zone_id), None)
+    return next((zone for zone in coordinator.structure.zones or [] if zone.id == zone_id), None)
 
 
 def zone_device_class(

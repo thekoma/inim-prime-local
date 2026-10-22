@@ -12,8 +12,8 @@ Please open issues at <https://github.com/thekoma/inim-prime-local/issues>. To h
      logs:
        custom_components.inim_prime: debug
    ```
-5. **Diagnostics.** Device page → **⋮ → Download diagnostics** (the API key is redacted automatically).
+5. **Diagnostics.** Device page → **⋮ → Download diagnostics** (the LAN password is redacted automatically).
 
-> ⚠️ **Never paste your API key** or full unredacted URLs. Scrub them from logs before attaching. The downloaded diagnostics already redact the key.
+> ⚠️ **Never paste your LAN password**, user codes or full unredacted webhook URLs. Scrub them from logs before attaching. The downloaded diagnostics already redact the password and the webhook id.
 
 For realtime/webhook setup questions, see [realtime.md](realtime.md); for polling behaviour see [polling-and-tuning.md](polling-and-tuning.md).

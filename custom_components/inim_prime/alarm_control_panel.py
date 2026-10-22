@@ -10,27 +10,17 @@ from homeassistant.components.alarm_control_panel.const import (
     AlarmControlPanelState,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .areas import area_shown
-from .client import (
-    ApiStatus,
-    Area,
-    AreaMode,
-    AreaState,
-    ArmMode,
-    InimApiError,
-    InimConnectionError,
-)
+from .client import Area, AreaMode, AreaState, ArmMode
 from .commands import async_arm_area
-from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
 from .device import panel_device_info
 
-# Arm/disarm issues panel writes (cgi or native, see commands.py); serialize
-# commands to one in flight at a time.
+# Arm/disarm issues panel writes (see commands.py); serialize commands to one
+# in flight at a time.
 PARALLEL_UPDATES = 1
 
 _MODE_TO_STATE: dict[AreaMode, AlarmControlPanelState] = {
@@ -168,36 +158,18 @@ class InimAlarmControlPanel(
         self._optimistic_state = state
         self.async_write_ha_state()
 
-    def _raise_command_error(self, err: Exception) -> None:
-        """Translate a panel write failure into a HomeAssistantError."""
-        if isinstance(err, InimApiError) and err.status == ApiStatus.ZONES_NOT_READY:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="zones_not_ready",
-            ) from err
-        raise HomeAssistantError(
-            translation_domain=DOMAIN,
-            translation_key="command_failed",
-            translation_placeholders={"error": str(err)},
-        ) from err
-
     async def _arm(self, mode: ArmMode, optimistic: AlarmControlPanelState) -> None:
-        """Arm the area in the given mode, optimistically updating state."""
-        try:
-            await async_arm_area(self.coordinator, self._area_id, mode)
-        except (InimApiError, InimConnectionError) as err:
-            self._raise_command_error(err)
+        """Arm (or disarm) the area, optimistically updating state.
+
+        A failure raises a HomeAssistantError from commands.py; the state is
+        re-read there right after the command.
+        """
+        await async_arm_area(self.coordinator, self._area_id, mode)
         self._optimistic(optimistic)
-        await self.coordinator.async_request_refresh()
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm command."""
-        try:
-            await async_arm_area(self.coordinator, self._area_id, ArmMode.DISARM)
-        except (InimApiError, InimConnectionError) as err:
-            self._raise_command_error(err)
-        self._optimistic(AlarmControlPanelState.DISARMED)
-        await self.coordinator.async_request_refresh()
+        await self._arm(ArmMode.DISARM, AlarmControlPanelState.DISARMED)
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         """Send arm away command."""

@@ -1,9 +1,7 @@
 """Switch platform for the INIM Prime integration.
 
 Exposes one switch per panel output (relay control) and one bypass switch per
-zone (zone exclusion), except for zones programmed "Non escludibile". Output control on a panel without the "Code" configured
-returns ``CODE_NOT_ALLOWED`` (status 8); that case is surfaced as a
-``HomeAssistantError`` without flipping the optimistic state.
+zone (zone exclusion), except for zones programmed "Non escludibile".
 """
 
 from __future__ import annotations
@@ -13,13 +11,12 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import ApiStatus, InimApiError, InimConnectionError, Output, Zone
+from .client import Output, Zone
 from .commands import async_set_output, async_set_zone_excluded
 from .const import DOMAIN
 from .coordinator import InimConfigEntry, InimDataUpdateCoordinator
@@ -32,8 +29,8 @@ from .device import (
 from .room_guess import guess_room
 from .zone_kind import native_zone
 
-# Output/bypass toggles issue panel writes; the cgi is single-threaded, so
-# serialize commands to one in flight at a time.
+# Output/bypass toggles are panel writes: serialize them to one in flight at a
+# time.
 PARALLEL_UPDATES = 1
 
 
@@ -100,9 +97,8 @@ class InimOutputSwitch(CoordinatorEntity[InimDataUpdateCoordinator], SwitchEntit
     """Switch controlling a single panel output (relay)."""
 
     _attr_has_entity_name = True
-    # Output control requires a panel Code (otherwise the panel rejects it with
-    # CODE_NOT_ALLOWED), so these are decluttered/hidden by default. Reversible
-    # by the user from the entity settings.
+    # Outputs drive sirens and other hardware, so these are decluttered/hidden by
+    # default. Reversible by the user from the entity settings.
     _attr_entity_registry_enabled_default = False
 
     def __init__(
@@ -144,37 +140,13 @@ class InimOutputSwitch(CoordinatorEntity[InimDataUpdateCoordinator], SwitchEntit
             return None
         return output.state != 0
 
-    async def _async_set(self, value: int) -> None:
-        """Send a set_output write, translating CODE_NOT_ALLOWED."""
-        try:
-            await async_set_output(self.coordinator, self._output_id, value)
-        except InimApiError as err:
-            if err.status == ApiStatus.CODE_NOT_ALLOWED:
-                raise HomeAssistantError(
-                    translation_domain=DOMAIN,
-                    translation_key="output_code_not_allowed",
-                ) from err
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="command_failed",
-                translation_placeholders={"error": str(err)},
-            ) from err
-        except InimConnectionError as err:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="command_failed",
-                translation_placeholders={"error": str(err)},
-            ) from err
-
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the output on."""
-        await self._async_set(1)
-        await self.coordinator.async_request_refresh()
+        """Turn the output on (a failure raises, see commands.py)."""
+        await async_set_output(self.coordinator, self._output_id, 1)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the output off."""
-        await self._async_set(0)
-        await self.coordinator.async_request_refresh()
+        """Turn the output off (a failure raises, see commands.py)."""
+        await async_set_output(self.coordinator, self._output_id, 0)
 
 
 class InimZoneBypassSwitch(
@@ -232,26 +204,13 @@ class InimZoneBypassSwitch(
             return None
         return zone.excluded
 
-    async def _async_set_excluded(self, excluded: bool) -> None:
-        """Send a set_zone_excluded write, translating failures."""
-        try:
-            await async_set_zone_excluded(self.coordinator, self._zone_id, excluded)
-        except (InimApiError, InimConnectionError) as err:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="command_failed",
-                translation_placeholders={"error": str(err)},
-            ) from err
-
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Bypass (exclude) the zone."""
-        await self._async_set_excluded(True)
-        await self.coordinator.async_request_refresh()
+        """Bypass (exclude) the zone (a failure raises, see commands.py)."""
+        await async_set_zone_excluded(self.coordinator, self._zone_id, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Un-bypass (include) the zone."""
-        await self._async_set_excluded(False)
-        await self.coordinator.async_request_refresh()
+        """Un-bypass (include) the zone (a failure raises, see commands.py)."""
+        await async_set_zone_excluded(self.coordinator, self._zone_id, False)
 
 
 class InimForceArmSwitch(RestoreEntity, SwitchEntity):

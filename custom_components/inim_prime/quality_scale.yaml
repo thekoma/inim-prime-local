@@ -22,8 +22,9 @@ rules:
   dependency-transparency:
     status: done
     comment: >-
-      No external runtime dependencies (requirements is empty); the async
-      client is vendored under client/ and uses HA's async_get_clientsession.
+      No external runtime dependencies (requirements is empty); the native
+      TCP 6004 client is vendored under client/ (asyncio streams, AES from
+      the cryptography package Home Assistant core already ships).
   docs-actions:
     status: done
     comment: >-
@@ -148,6 +149,9 @@ rules:
   async-dependency:
     status: done
   inject-websession:
-    status: done
+    status: exempt
+    comment: >-
+      No HTTP: the panel is read over its native TCP protocol with asyncio
+      streams, so there is no web session to inject.
   strict-typing:
     status: done

@@ -16,7 +16,7 @@ _FACTORY_AREA = re.compile(r"AREA\s+\d+")
 
 
 async def _setup(hass, panel_config) -> MockConfigEntry:
-    entry = MockConfigEntry(domain=DOMAIN, data=panel_config, title="INIM PrimeX (E2E)")
+    entry = MockConfigEntry(domain=DOMAIN, data=panel_config, title="INIM PrimeX (E2E)", version=2)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()

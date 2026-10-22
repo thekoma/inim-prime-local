@@ -10,12 +10,25 @@ from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelState,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.inim_prime.alarm_control_panel import (
     InimAlarmControlPanel,
 )
-from custom_components.inim_prime.client import Area, AreaMode, AreaState, ArmMode
+from custom_components.inim_prime.client import (
+    Area,
+    AreaMode,
+    AreaState,
+    Fault,
+    Local6004Config,
+    NativeAreaStatus,
+    NativeCommandNotSent,
+    NativeZonesNotReady,
+    Version,
+)
+from custom_components.inim_prime.const import DOMAIN
 from custom_components.inim_prime.coordinator import (
     InimData,
     InimDataUpdateCoordinator,
@@ -38,60 +51,31 @@ def _area(
     )
 
 
-def _make_coordinator(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    areas: list[Area],
-    sample_version,
-    sample_zones,
-    sample_scenarios,
-    sample_outputs,
-    sample_fault,
-    sample_api_stats,
-) -> InimDataUpdateCoordinator:
-    mock_config_entry.add_to_hass(hass)
-    coordinator = InimDataUpdateCoordinator(hass, mock_config_entry, mock_client)
-    coordinator.data = InimData(
-        version=sample_version,
-        areas=areas,
-        zones=sample_zones,
-        scenarios=sample_scenarios,
-        outputs=sample_outputs,
-        fault=sample_fault,
-        api_stats=sample_api_stats,
-    )
-    return coordinator
-
-
 @pytest.fixture
 def entity_factory(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    sample_version,
-    sample_zones,
-    sample_scenarios,
-    sample_outputs,
-    sample_fault,
-    sample_api_stats,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
 ):
-    """Build an entity bound to a coordinator carrying the given areas."""
+    """Build an entity bound to a coordinator carrying the given area."""
+    mock_config_entry.add_to_hass(hass)
 
-    def _factory(area: Area) -> InimAlarmControlPanel:
-        coordinator = _make_coordinator(
-            hass,
-            mock_config_entry,
-            mock_client,
-            [area],
-            sample_version,
-            sample_zones,
-            sample_scenarios,
-            sample_outputs,
-            sample_fault,
-            sample_api_stats,
+    def _factory(area: Area, entity_area_id: int | None = None) -> InimAlarmControlPanel:
+        coordinator = InimDataUpdateCoordinator(
+            hass, mock_config_entry, mock_local_client, mock_local_config
         )
-        entity = InimAlarmControlPanel(coordinator, area.id)
+        coordinator.data = InimData(
+            version=Version(raw="4.07 PX500", service=False),
+            areas=[area],
+            zones=[],
+            scenarios=[],
+            outputs=[],
+            fault=Fault(vcc=13.7, has_faults=False),
+        )
+        # The command re-reads the panel right after it; not under test here.
+        coordinator.async_refresh = AsyncMock()
+        entity = InimAlarmControlPanel(coordinator, entity_area_id or area.id)
         entity.hass = hass
         entity.entity_id = "alarm_control_panel.home"
         return entity
@@ -143,6 +127,8 @@ def test_static_properties(entity_factory) -> None:
     )
     entry_id = entity.coordinator.config_entry.entry_id
     assert entity.unique_id == f"{entry_id}_area_1"
+    assert entity.name == "Home"
+    assert entity.available is True
     assert entity.device_info["manufacturer"] == "INIM"
     assert entity.device_info["model"] == "PX500"
     assert entity.device_info["sw_version"] == "4.07"
@@ -160,38 +146,77 @@ def test_extra_state_attributes(entity_factory) -> None:
     }
 
 
-async def test_disarm_calls_client_and_optimistic(entity_factory) -> None:
-    """Disarm calls the client, sets optimistic state, requests refresh."""
+def test_area_missing_from_the_data(entity_factory) -> None:
+    """An entity whose area is gone is unavailable and reports nothing."""
+    entity = entity_factory(_area(AreaMode.DISARMED), entity_area_id=9)
+    assert entity.available is False
+    assert entity.alarm_state is None
+    assert entity.name is None
+    assert entity.extra_state_attributes == {"area_id": 9}
+
+
+async def test_disarm_sends_native_and_goes_optimistic(entity_factory) -> None:
+    """Disarm sends op 3 (no zone check), re-reads the panel, goes optimistic."""
     entity = entity_factory(_area(AreaMode.TOTAL))
-    entity.coordinator.async_request_refresh = AsyncMock()
+    client = entity.coordinator.client
 
     await entity.async_alarm_disarm()
 
-    entity.coordinator.client.disarm_area.assert_awaited_once_with(1)
+    client.async_set_area_modes.assert_awaited_once_with(
+        {1: AreaMode.DISARMED}, require_ready=set()
+    )
+    entity.coordinator.async_refresh.assert_awaited_once()
     assert entity.alarm_state == AlarmControlPanelState.DISARMED
-    entity.coordinator.async_request_refresh.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
     ("method", "mode", "expected"),
     [
-        ("async_alarm_arm_away", ArmMode.TOTAL, AlarmControlPanelState.ARMED_AWAY),
-        ("async_alarm_arm_home", ArmMode.PARTIAL, AlarmControlPanelState.ARMED_HOME),
-        ("async_alarm_arm_night", ArmMode.SNAPSHOT, AlarmControlPanelState.ARMED_NIGHT),
+        ("async_alarm_arm_away", AreaMode.TOTAL, AlarmControlPanelState.ARMED_AWAY),
+        ("async_alarm_arm_home", AreaMode.PARTIAL, AlarmControlPanelState.ARMED_HOME),
+        ("async_alarm_arm_night", AreaMode.SNAPSHOT, AlarmControlPanelState.ARMED_NIGHT),
     ],
 )
-async def test_arm_calls_client_and_optimistic(
-    entity_factory, method: str, mode: ArmMode, expected
+async def test_arm_sends_native_and_goes_optimistic(
+    entity_factory, method: str, mode: AreaMode, expected
 ) -> None:
-    """Each arm method calls arm_area with the right mode and goes optimistic."""
+    """Each arm method sends the area's mode, checking the area's zones first."""
     entity = entity_factory(_area(AreaMode.DISARMED))
-    entity.coordinator.async_request_refresh = AsyncMock()
+    client = entity.coordinator.client
 
     await getattr(entity, method)()
 
-    entity.coordinator.client.arm_area.assert_awaited_once_with(1, mode)
+    # Zone 1 (not interior, not auto-bypass) is in area 1: it must be ready.
+    client.async_set_area_modes.assert_awaited_once_with({1: mode}, require_ready={1})
+    entity.coordinator.async_refresh.assert_awaited_once()
     assert entity.alarm_state == expected
-    entity.coordinator.async_request_refresh.assert_awaited_once()
+
+
+async def test_arm_with_a_zone_not_ready_raises(entity_factory) -> None:
+    """Zones not ready: nothing is sent, the state stays as it is."""
+    entity = entity_factory(_area(AreaMode.DISARMED))
+    entity.coordinator.client.async_set_area_modes.side_effect = NativeZonesNotReady(3, "open")
+
+    with pytest.raises(HomeAssistantError) as exc_info:
+        await entity.async_alarm_arm_away()
+
+    assert exc_info.value.translation_key == "zones_not_ready"
+    assert entity.alarm_state == AlarmControlPanelState.DISARMED
+    entity.coordinator.async_refresh.assert_not_awaited()
+
+
+async def test_arm_not_sent_raises_command_failed(entity_factory) -> None:
+    """A command that never left raises command_failed, with no optimistic state."""
+    entity = entity_factory(_area(AreaMode.DISARMED))
+    entity.coordinator.client.async_set_area_modes.side_effect = NativeCommandNotSent(
+        3, "connection refused"
+    )
+
+    with pytest.raises(HomeAssistantError) as exc_info:
+        await entity.async_alarm_arm_home()
+
+    assert exc_info.value.translation_key == "command_failed"
+    assert entity.alarm_state == AlarmControlPanelState.DISARMED
 
 
 @pytest.mark.parametrize("label", ["AREA       006 ", "Box", "Area 5"])
@@ -201,10 +226,39 @@ def test_area_entity_enabled_by_default(entity_factory, label: str) -> None:
     assert entity.entity_registry_enabled_default is True
 
 
-def test_setup_creates_one_entity_per_area(entity_factory) -> None:
+def test_optimistic_state_cleared_on_update(entity_factory) -> None:
     """The optimistic state is cleared once fresh coordinator data arrives."""
     entity = entity_factory(_area(AreaMode.DISARMED))
     entity._optimistic_state = AlarmControlPanelState.ARMED_AWAY
     # Simulate a coordinator update with disarmed data.
     entity._handle_coordinator_update()
     assert entity.alarm_state == AlarmControlPanelState.DISARMED
+
+
+async def test_setup_follows_the_live_area_status(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    patch_client: AsyncMock,
+    area_statuses: dict[int, NativeAreaStatus],
+) -> None:
+    """End to end: the area's state follows the native partition status."""
+    mock_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "alarm_control_panel", DOMAIN, f"{mock_config_entry.entry_id}_area_1"
+    )
+    assert entity_id is not None
+    assert hass.states.get(entity_id).state == AlarmControlPanelState.DISARMED
+    coordinator = mock_config_entry.runtime_data.coordinator
+
+    area_statuses[1] = NativeAreaStatus(mode=AreaMode.TOTAL, alarm=False, alarm_memory=False)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == AlarmControlPanelState.ARMED_AWAY
+
+    area_statuses[1] = NativeAreaStatus(mode=AreaMode.TOTAL, alarm=True, alarm_memory=True)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == AlarmControlPanelState.TRIGGERED

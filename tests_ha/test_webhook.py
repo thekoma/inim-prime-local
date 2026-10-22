@@ -1,8 +1,7 @@
-"""Tests for the INIM Prime local realtime webhook + adaptive polling."""
+"""Tests for the INIM Prime local realtime webhook and the optimistic patch."""
 
 from __future__ import annotations
 
-from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,28 +9,25 @@ from homeassistant.components import webhook
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.inim_prime import webhook as webhook_mod
 from custom_components.inim_prime.client import (
     AreaMode,
     AreaState,
-    Zone,
+    Local6004Config,
+    NativeZoneStatus,
     ZoneState,
 )
 from custom_components.inim_prime.const import (
-    CONF_APIKEY,
     CONF_LOCAL_PASSWORD,
-    CONF_SCAN_INTERVAL_ACTIVE,
-    CONF_SCAN_INTERVAL_IDLE,
-    CONF_USE_HTTPS,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DOMAIN,
+    MAX_WEBHOOK_BODY,
 )
-from custom_components.inim_prime.coordinator import (
-    InimData,
-    InimDataUpdateCoordinator,
-)
+from custom_components.inim_prime.coordinator import InimDataUpdateCoordinator
 
 WEBHOOK_ID = "inim_test_secret_abcdef"
+ZONE_ENTITY = "binary_sensor.inim_prime_front_door"
 
 
 @pytest.fixture
@@ -40,25 +36,14 @@ def push_entry() -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         title="INIM Prime",
-        data={
-            "host": "192.0.2.10",
-            "port": 8080,
-            CONF_APIKEY: "secret-key",
-            CONF_USE_HTTPS: False,
-            CONF_LOCAL_PASSWORD: "pass",
-            "scan_interval": 15,
-        },
-        options={
-            CONF_WEBHOOK_ENABLED: True,
-            CONF_WEBHOOK_ID: WEBHOOK_ID,
-            CONF_SCAN_INTERVAL_IDLE: 30,
-            CONF_SCAN_INTERVAL_ACTIVE: 3,
-        },
-        unique_id="192.0.2.10:8080",
+        data={"host": "192.0.2.10", CONF_LOCAL_PASSWORD: "pass"},
+        options={CONF_WEBHOOK_ENABLED: True, CONF_WEBHOOK_ID: WEBHOOK_ID},
+        unique_id="192.0.2.10",
+        version=2,
     )
 
 
-async def _setup(hass: HomeAssistant, entry: MockConfigEntry, mock_client: AsyncMock):
+async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> InimDataUpdateCoordinator:
     """Set up the integration and return the coordinator."""
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -66,395 +51,273 @@ async def _setup(hass: HomeAssistant, entry: MockConfigEntry, mock_client: Async
     return entry.runtime_data.coordinator
 
 
-def _panel_reports_zone1_open(mock_client: AsyncMock) -> None:
-    """Make the reconciliation poll agree that zone 1 is now open.
-
-    The webhook applies an optimistic patch immediately; the follow-up
-    reconcile poll re-reads the panel, so for an end-to-end assertion the
-    mocked panel must report the same post-event state (as a real panel
-    would).
-    """
-    mock_client.get_zones.return_value = [
-        Zone(
-            id=1,
-            label="Front Door",
-            terminal=1,
-            state=ZoneState.ALARM,
-            alarm_memory=False,
-            excluded=False,
-        )
-    ]
-
-
 # ---------------------------------------------------------------------------
-# apply_event (coordinator patch helper)
+# apply_event (the coordinator's optimistic patch)
 # ---------------------------------------------------------------------------
-def _make_coordinator(
-    hass: HomeAssistant, entry: MockConfigEntry, client: AsyncMock
+async def _seeded(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    client: AsyncMock,
+    config: Local6004Config,
 ) -> InimDataUpdateCoordinator:
     entry.add_to_hass(hass)
-    return InimDataUpdateCoordinator(hass, entry, client)
-
-
-def _seed(coordinator: InimDataUpdateCoordinator, data: InimData) -> None:
-    coordinator.data = data
+    coordinator = InimDataUpdateCoordinator(hass, entry, client, config)
+    coordinator.data = await coordinator._async_update_data()
+    return coordinator
 
 
 async def test_apply_event_zone_open_close(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
 ) -> None:
     """zone_open/zone_close flip the targeted zone's state immutably."""
-    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
-    original = await coordinator._async_update_data()
-    _seed(coordinator, original)
+    coordinator = await _seeded(hass, mock_config_entry, mock_local_client, mock_local_config)
+    original = coordinator.data
 
     opened = coordinator.apply_event("zone_open", id="1")
     assert opened is not None
     assert opened.zones[0].state is ZoneState.ALARM
-    # Original snapshot is untouched (immutability).
-    assert original.zones[0].state is ZoneState.READY
+    assert original.zones[0].state is ZoneState.READY  # the snapshot is untouched
 
-    _seed(coordinator, opened)
+    coordinator.data = opened
     closed = coordinator.apply_event("zone_close", id="1")
+    assert closed is not None
     assert closed.zones[0].state is ZoneState.READY
 
 
 async def test_apply_event_arm_disarm_alarm(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
 ) -> None:
-    """arm/disarm change area mode; alarm sets memory + ALARM state."""
-    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
-    _seed(coordinator, await coordinator._async_update_data())
+    """arm/disarm change the area mode and clear an alarm; alarm latches it."""
+    coordinator = await _seeded(hass, mock_config_entry, mock_local_client, mock_local_config)
 
     armed = coordinator.apply_event("arm", area="1")
     assert armed.areas[0].mode is AreaMode.TOTAL
 
-    _seed(coordinator, armed)
-    disarmed = coordinator.apply_event("disarm", area="1")
-    assert disarmed.areas[0].mode is AreaMode.DISARMED
-
-    _seed(coordinator, disarmed)
     alarmed = coordinator.apply_event("alarm", area="1")
     assert alarmed.areas[0].alarm_memory is True
     assert alarmed.areas[0].state is AreaState.ALARM
 
-    # A disarm after an alarm must clear the latched alarm state/memory,
-    # otherwise the panel would still render TRIGGERED (state in ALARM).
-    _seed(coordinator, alarmed)
-    disarmed_after_alarm = coordinator.apply_event("disarm", area="1")
-    assert disarmed_after_alarm.areas[0].mode is AreaMode.DISARMED
-    assert disarmed_after_alarm.areas[0].state is AreaState.READY
-    assert disarmed_after_alarm.areas[0].alarm_memory is False
-
-    # arm likewise resets state to a non-alarm value.
-    _seed(coordinator, alarmed)
-    armed_after_alarm = coordinator.apply_event("arm", area="1")
-    assert armed_after_alarm.areas[0].state is AreaState.READY
+    # A disarm after an alarm clears the latched state, or the panel entity
+    # would keep rendering TRIGGERED until the next poll.
+    coordinator.data = alarmed
+    disarmed = coordinator.apply_event("disarm", area="1")
+    assert disarmed.areas[0].mode is AreaMode.DISARMED
+    assert disarmed.areas[0].state is AreaState.READY
+    assert disarmed.areas[0].alarm_memory is False
 
 
 async def test_apply_event_output_and_fault(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
 ) -> None:
-    """output sets the relay state; fault/restore toggle has_faults."""
-    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
-    _seed(coordinator, await coordinator._async_update_data())
+    """output sets the relay state; fault/tamper/restore toggle has_faults."""
+    coordinator = await _seeded(hass, mock_config_entry, mock_local_client, mock_local_config)
 
-    out = coordinator.apply_event("output", id="1", state="1")
-    assert out.outputs[0].state == 1
+    assert coordinator.apply_event("output", id="1", state="1").outputs[0].state == 1
+    # A non-integer state counts as on rather than failing.
+    assert coordinator.apply_event("output", id="1", state="junk").outputs[0].state == 1
 
-    faulted = coordinator.apply_event("fault", code="mains")
-    assert faulted.fault.has_faults is True
+    assert coordinator.apply_event("fault", code="mains").fault.has_faults is True
+    tampered = coordinator.apply_event("tamper")
+    assert tampered.fault.has_faults is True
+    coordinator.data = tampered
+    assert coordinator.apply_event("fault_restore").fault.has_faults is False
 
-    _seed(coordinator, faulted)
-    restored = coordinator.apply_event("fault_restore", code="mains")
-    assert restored.fault.has_faults is False
 
-
-async def test_apply_event_unknown_or_missing_returns_none(
+async def test_apply_event_unknown_targets_return_none(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
 ) -> None:
-    """Unknown targets / bad ids return None (poll reconciles)."""
-    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
-    _seed(coordinator, await coordinator._async_update_data())
+    """Unknown objects, bad ids and unknown events leave reconciliation to the poll."""
+    coordinator = await _seeded(hass, mock_config_entry, mock_local_client, mock_local_config)
 
     assert coordinator.apply_event("zone_open", id="999") is None
     assert coordinator.apply_event("zone_open", id="not-a-number") is None
     assert coordinator.apply_event("arm") is None
+    assert coordinator.apply_event("alarm", area="999") is None
+    assert coordinator.apply_event("output", id="999", state="1") is None
     assert coordinator.apply_event("bogus_event", id="1") is None
 
 
-async def test_apply_event_no_data_returns_none(
+async def test_apply_event_without_snapshot_returns_none(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
+    mock_local_client: AsyncMock,
+    mock_local_config: Local6004Config,
 ) -> None:
-    """With no cached snapshot yet, apply_event returns None."""
-    coordinator = _make_coordinator(hass, mock_config_entry, mock_client)
-    assert coordinator.data is None
+    """With no snapshot yet there is nothing to patch."""
+    mock_config_entry.add_to_hass(hass)
+    coordinator = InimDataUpdateCoordinator(
+        hass, mock_config_entry, mock_local_client, mock_local_config
+    )
     assert coordinator.apply_event("zone_open", id="1") is None
 
 
 # ---------------------------------------------------------------------------
-# Adaptive interval selection
+# End to end through the HA test client
 # ---------------------------------------------------------------------------
-async def test_idle_interval_from_options(
+async def test_webhook_zone_open_updates_entity_without_a_refresh(
     hass: HomeAssistant,
     push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-) -> None:
-    """The idle interval is taken from the idle option."""
-    coordinator = _make_coordinator(hass, push_entry, mock_client)
-    assert coordinator.update_interval == timedelta(seconds=30)
-
-
-async def test_legacy_scan_interval_still_used_as_idle(
-    hass: HomeAssistant,
-    mock_client: AsyncMock,
-) -> None:
-    """Without the new options, the legacy scan_interval option drives idle."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="INIM Prime",
-        data={
-            "host": "192.0.2.10",
-            "port": 8080,
-            CONF_APIKEY: "secret-key",
-            CONF_USE_HTTPS: False,
-            "scan_interval": 15,
-        },
-        options={"scan_interval": 42},
-        unique_id="192.0.2.10:8080",
-    )
-    coordinator = _make_coordinator(hass, entry, mock_client)
-    assert coordinator.update_interval == timedelta(seconds=42)
-
-
-async def test_activate_fast_poll_then_decays(
-    hass: HomeAssistant,
-    push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-) -> None:
-    """activate_fast_poll switches to the active interval, then decays."""
-    coordinator = _make_coordinator(hass, push_entry, mock_client)
-    assert coordinator.update_interval == timedelta(seconds=30)
-
-    coordinator.activate_fast_poll()
-    assert coordinator.update_interval == timedelta(seconds=3)
-
-    coordinator._decay_to_idle()
-    assert coordinator.update_interval == timedelta(seconds=30)
-
-
-# ---------------------------------------------------------------------------
-# End-to-end webhook via the HA test client
-# ---------------------------------------------------------------------------
-async def test_webhook_zone_open_updates_entity(
-    hass: HomeAssistant,
-    push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
     patch_client: AsyncMock,
     hass_client_no_auth,
 ) -> None:
-    """A panel zone_open POST flips the zone binary sensor immediately."""
-    coordinator = await _setup(hass, push_entry, mock_client)
-    entity_id = "binary_sensor.inim_prime_front_door"
-    assert hass.states.get(entity_id).state == "off"
+    """The patch shows at once and is not undone by an immediate re-read.
 
-    _panel_reports_zone1_open(mock_client)
-    client = await hass_client_no_auth()
-    resp = await client.post(f"/api/webhook/{WEBHOOK_ID}?ev=zone_open&id=1")
-    assert resp.status == 200
-    await hass.async_block_till_done()
-
-    assert hass.states.get(entity_id).state == "on"
-    # An event also kicked the fast poll tier.
-    assert coordinator.update_interval == timedelta(seconds=3)
-
-
-async def test_webhook_optimistic_value_survives_stale_poll(
-    hass: HomeAssistant,
-    push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    patch_client: AsyncMock,
-    hass_client_no_auth,
-) -> None:
-    """The optimistic patch must not be reverted by a lagging reconcile poll.
-
-    On a real panel the poll lags the event, so the reconcile read still
-    returns the OLD (pre-event) state for a while. The webhook must not trigger
-    an immediate refresh that would re-read that stale state and flap the
-    entity back off. Here the mocked panel keeps reporting zone 1 closed; the
-    entity must still be 'on' from the optimistic patch.
+    The panel still reports zone 1 closed here: the webhook must not trigger a
+    refresh that would read that and flap the entity back off; the next
+    scheduled poll reconciles.
     """
-    coordinator = await _setup(hass, push_entry, mock_client)
-    entity_id = "binary_sensor.inim_prime_front_door"
-    assert hass.states.get(entity_id).state == "off"
-
-    # Panel still reports the OLD state (zone closed) — the realistic race.
-    poll_calls_before = mock_client.get_zones.call_count
+    await _setup(hass, push_entry)
+    assert hass.states.get(ZONE_ENTITY).state == "off"
+    reads = patch_client.async_get_zone_statuses.await_count
 
     client = await hass_client_no_auth()
     resp = await client.post(f"/api/webhook/{WEBHOOK_ID}?ev=zone_open&id=1")
     assert resp.status == 200
     await hass.async_block_till_done()
 
-    # Optimistic value holds even though the panel still reports closed.
-    assert hass.states.get(entity_id).state == "on"
-    # No immediate reconcile poll was kicked (would re-read stale state).
-    assert mock_client.get_zones.call_count == poll_calls_before
-    # The fast poll tier is armed to reconcile at the active cadence instead.
-    assert coordinator.update_interval == timedelta(seconds=3)
+    assert hass.states.get(ZONE_ENTITY).state == "on"
+    assert patch_client.async_get_zone_statuses.await_count == reads
 
 
-async def test_webhook_get_method_accepted(
+async def test_webhook_patch_reconciled_by_the_next_poll(
     hass: HomeAssistant,
     push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
     patch_client: AsyncMock,
+    zone_statuses: dict[int, NativeZoneStatus],
     hass_client_no_auth,
 ) -> None:
-    """GET works identically to POST on this firmware path."""
-    await _setup(hass, push_entry, mock_client)
-    _panel_reports_zone1_open(mock_client)
+    """The next poll replaces the patch with the panel's own state."""
+    coordinator = await _setup(hass, push_entry)
     client = await hass_client_no_auth()
-    resp = await client.get(f"/api/webhook/{WEBHOOK_ID}?ev=zone_open&id=1")
-    assert resp.status == 200
+    await client.get(f"/api/webhook/{WEBHOOK_ID}?ev=zone_open&id=1")
     await hass.async_block_till_done()
-    assert hass.states.get("binary_sensor.inim_prime_front_door").state == "on"
+    assert hass.states.get(ZONE_ENTITY).state == "on"
+
+    zone_statuses[1] = NativeZoneStatus(ZoneState.READY, excluded=False, alarm_memory=False)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(ZONE_ENTITY).state == "off"
 
 
 async def test_webhook_body_form_encoded(
     hass: HomeAssistant,
     push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
     patch_client: AsyncMock,
     hass_client_no_auth,
 ) -> None:
     """Params can arrive in the form body, not just the query string."""
-    await _setup(hass, push_entry, mock_client)
-    _panel_reports_zone1_open(mock_client)
+    await _setup(hass, push_entry)
     client = await hass_client_no_auth()
-    resp = await client.post(
-        f"/api/webhook/{WEBHOOK_ID}",
-        data={"ev": "zone_open", "id": "1"},
-    )
+    resp = await client.post(f"/api/webhook/{WEBHOOK_ID}", data={"ev": "zone_open", "id": "1"})
     assert resp.status == 200
     await hass.async_block_till_done()
-    assert hass.states.get("binary_sensor.inim_prime_front_door").state == "on"
+    assert hass.states.get(ZONE_ENTITY).state == "on"
 
 
-async def test_webhook_unknown_event_ignored_200(
+async def test_webhook_ignores_unknown_and_malformed_calls(
     hass: HomeAssistant,
     push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
     patch_client: AsyncMock,
     hass_client_no_auth,
 ) -> None:
-    """An unknown event is ignored but still returns 200, no state change."""
-    await _setup(hass, push_entry, mock_client)
-    client = await hass_client_no_auth()
-    resp = await client.post(f"/api/webhook/{WEBHOOK_ID}?ev=teleport&id=1")
-    assert resp.status == 200
-    await hass.async_block_till_done()
-    assert hass.states.get("binary_sensor.inim_prime_front_door").state == "off"
-
-
-async def test_webhook_malformed_does_not_crash(
-    hass: HomeAssistant,
-    push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    patch_client: AsyncMock,
-    hass_client_no_auth,
-) -> None:
-    """A malformed call (no params, junk body) is ignored and returns 200."""
-    await _setup(hass, push_entry, mock_client)
+    """Unknown events, empty or junk bodies and unpatchable events answer 200."""
+    await _setup(hass, push_entry)
     client = await hass_client_no_auth()
 
-    resp = await client.post(f"/api/webhook/{WEBHOOK_ID}")
-    assert resp.status == 200
-
-    resp = await client.post(
-        f"/api/webhook/{WEBHOOK_ID}",
-        data=b"\x00\x01\x02 not form data",
-        headers={"Content-Type": "application/octet-stream"},
-    )
-    assert resp.status == 200
+    for url, kwargs in (
+        (f"/api/webhook/{WEBHOOK_ID}?ev=teleport&id=1", {}),
+        (f"/api/webhook/{WEBHOOK_ID}", {}),
+        (
+            f"/api/webhook/{WEBHOOK_ID}",
+            {
+                "data": b"\x00\x01\x02 not form data",
+                "headers": {"Content-Type": "application/octet-stream"},
+            },
+        ),
+        (f"/api/webhook/{WEBHOOK_ID}?ev=zone_open&id=999", {}),
+        ("/api/webhook/inim_wrong_secret?ev=zone_open&id=1", {}),
+    ):
+        resp = await client.post(url, **kwargs)
+        assert resp.status == 200
     await hass.async_block_till_done()
-    assert hass.states.get("binary_sensor.inim_prime_front_door").state == "off"
-
-
-async def test_webhook_wrong_secret_ignored(
-    hass: HomeAssistant,
-    push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    patch_client: AsyncMock,
-    hass_client_no_auth,
-) -> None:
-    """A call to an unregistered id returns 200 and changes nothing."""
-    await _setup(hass, push_entry, mock_client)
-    client = await hass_client_no_auth()
-    resp = await client.post("/api/webhook/inim_wrong_secret?ev=zone_open&id=1")
-    assert resp.status == 200
-    await hass.async_block_till_done()
-    assert hass.states.get("binary_sensor.inim_prime_front_door").state == "off"
+    assert hass.states.get(ZONE_ENTITY).state == "off"
 
 
 async def test_webhook_unregistered_after_unload(
     hass: HomeAssistant,
     push_entry: MockConfigEntry,
-    mock_client: AsyncMock,
     patch_client: AsyncMock,
-    hass_client_no_auth,
 ) -> None:
-    """Unloading the entry unregisters the webhook (id becomes reusable)."""
-    await _setup(hass, push_entry, mock_client)
+    """Unloading the entry unregisters the webhook (the id becomes free)."""
+    await _setup(hass, push_entry)
 
     assert await hass.config_entries.async_unload(push_entry.entry_id)
     await hass.async_block_till_done()
 
-    # After unload the id is free again: re-registering must not raise.
     webhook.async_register(hass, "test", "probe", WEBHOOK_ID, lambda *a: None)
     webhook.async_unregister(hass, WEBHOOK_ID)
 
 
 # ---------------------------------------------------------------------------
-# Options flow: enabling push mode generates a webhook id + URL notification
+# Helpers
 # ---------------------------------------------------------------------------
-async def test_options_enable_push_generates_webhook(
-    hass: HomeAssistant,
-    mock_config_entry: MockConfigEntry,
-    mock_client: AsyncMock,
-    patch_client: AsyncMock,
-) -> None:
-    """Turning on push mode in options stores a webhook id and notifies."""
-    mock_config_entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
+def test_register_webhook_noop_without_id(hass: HomeAssistant) -> None:
+    """With no webhook id configured, register/unregister do nothing."""
+    entry = MockConfigEntry(domain=DOMAIN, title="x", data={}, options={})
+    webhook_mod.async_register_webhook(hass, entry)
+    webhook_mod.async_unregister_webhook(hass, entry)
 
-    result = await hass.config_entries.options.async_init(mock_config_entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_SCAN_INTERVAL_IDLE: 30,
-            CONF_SCAN_INTERVAL_ACTIVE: 3,
-            CONF_WEBHOOK_ENABLED: True,
-        },
-    )
-    await hass.async_block_till_done()
 
-    assert mock_config_entry.options[CONF_WEBHOOK_ENABLED] is True
-    webhook_id = mock_config_entry.options[CONF_WEBHOOK_ID]
-    assert webhook_id
+class _FakeRequest:
+    """Minimal web.Request stand-in for the parsing helpers."""
 
-    # The webhook was registered on reload (OptionsFlowWithReload); the id is
-    # taken, so a fresh registration of the same id would raise.
-    with pytest.raises(ValueError):
-        webhook.async_register(hass, "probe", "probe", webhook_id, lambda *a: None)
+    def __init__(self, method="POST", query=None, raw=b"", post_raises=False):
+        self.method = method
+        self.query = query or {}
+        self._raw = raw
+        self._post_raises = post_raises
+
+    async def read(self):
+        return self._raw
+
+    async def post(self):
+        if self._post_raises:
+            raise ValueError("not form data")
+        return {"id": "7", "file": object()}
+
+
+async def test_handler_swallows_processing_errors(hass: HomeAssistant) -> None:
+    """The handler answers 200 even when processing raises."""
+    entry = MockConfigEntry(domain=DOMAIN, title="x")  # no runtime_data: _process raises
+    handler = webhook_mod._make_handler(entry)
+
+    resp = await handler(hass, "wid", _FakeRequest(method="GET", query={"ev": "zone_open"}))
+    assert resp.status == 200
+
+
+async def test_read_params_merges_body_and_query() -> None:
+    """Body params are read (strings only); the query string wins on conflict."""
+    request = _FakeRequest(query={"ev": "zone_open", "id": "1"}, raw=b"id=7")
+    assert await webhook_mod._read_params(request) == {"ev": "zone_open", "id": "1"}
+    request = _FakeRequest(query={"ev": "zone_open"}, raw=b"id=7")
+    assert await webhook_mod._read_params(request) == {"ev": "zone_open", "id": "7"}
+
+
+async def test_read_params_drops_oversized_or_unparsable_bodies() -> None:
+    """An oversized or unparsable body is ignored; the query survives."""
+    big = _FakeRequest(query={"ev": "arm"}, raw=b"x" * (MAX_WEBHOOK_BODY + 1))
+    assert await webhook_mod._read_params(big) == {"ev": "arm"}
+    junk = _FakeRequest(query={"ev": "arm"}, raw=b"garbage", post_raises=True)
+    assert await webhook_mod._read_params(junk) == {"ev": "arm"}
