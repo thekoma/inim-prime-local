@@ -552,3 +552,57 @@ async def test_panel_entity_follows_the_live_area_state(
     await entry.runtime_data.coordinator.async_refresh()
     await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "armed_away"
+
+
+async def test_panel_edit_renames_and_changes_areas(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """Editing an areas panel renames it and changes its members, keeping its id."""
+    entry = _add_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry, options={CONF_PANELS: [{"id": "p1", "kind": "areas", "name": "Old", "areas": [0]}]}
+    )
+    await _setup_entry(hass, entry)
+
+    result = await _pick(hass, await _open_panels(hass, entry), "panel_edit")
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"panel": "p1"})
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"name": "Casa", "areas": ["0", "1"]}
+    )
+    await hass.async_block_till_done()
+
+    panels = entry.options[CONF_PANELS]
+    assert len(panels) == 1
+    assert panels[0]["id"] == "p1"
+    assert panels[0]["name"] == "Casa"
+    assert panels[0]["areas"] == [0, 1]
+
+
+async def test_panel_edit_scenarios(
+    hass: HomeAssistant, patch_panel_client: AsyncMock
+) -> None:
+    """Editing a scenarios panel renames it and swaps its arm/disarm scenes."""
+    entry = _add_entry(hass)
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            CONF_PANELS: [
+                {"id": "s1", "kind": "scenarios", "name": "Old", "arm_scenario": 2,
+                 "disarm_scenario": 8}
+            ]
+        },
+    )
+    await _setup_entry(hass, entry)
+
+    result = await _pick(hass, await _open_panels(hass, entry), "panel_edit")
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"panel": "s1"})
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"name": "Tutto", "arm_scenario": "8", "disarm_scenario": "2"}
+    )
+    await hass.async_block_till_done()
+
+    p = entry.options[CONF_PANELS][0]
+    assert p == {"id": "s1", "kind": "scenarios", "name": "Tutto", "arm_scenario": 8,
+                 "disarm_scenario": 2}

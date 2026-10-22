@@ -79,7 +79,8 @@
           "panel_add_inverse": "Crea da una coppia di scenari rilevata",
           "panel_add_areas": "Crea da un insieme di aree",
           "panel_add_scenarios": "Crea da due scenari",
-          "panel_remove": "Rimuovi un pannello"
+          "panel_remove": "Rimuovi un pannello",
+          "panel_edit": "Modifica un pannello"
         }
       },
       "panel_add_areas": {
@@ -110,6 +111,23 @@
         "title": "Rimuovi pannelli",
         "data": {
           "remove": "Pannelli da rimuovere"
+        }
+      },
+      "panel_edit": {
+        "title": "Modifica un pannello",
+        "description": "Scegli il pannello da modificare; seguono nome e aree o scenari.",
+        "data": {
+          "panel": "Pannello"
+        }
+      },
+      "panel_edit_form": {
+        "title": "Modifica pannello",
+        "description": "Cambia il nome e le aree o gli scenari. Il pannello mantiene la sua identità.",
+        "data": {
+          "name": "Nome",
+          "areas": "Aree",
+          "arm_scenario": "Scenario di inserimento",
+          "disarm_scenario": "Scenario di disinserimento"
         }
       }
     },
