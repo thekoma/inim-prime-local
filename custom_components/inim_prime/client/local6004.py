@@ -83,7 +83,8 @@ tables. Its map is :data:`_LAYOUT_50X`: area and zone label tables are
 unchanged, the scenario-mode, scenario-label, output-label, zone-settings and
 zone-kind tables moved, and the half-B zone id and the output terminals shifted
 from ``+1005`` to ``+1505`` (zone ids 1005+ are the new CoreSync video zones).
-The event-log offset is not mapped for 5.x yet, so there is no event log there.
+The event log keeps its record layout but numbers its event codes differently:
+codes are named with the class table the panel reports (decode_event_classes).
 A firmware whose major digit is not in :data:`_LAYOUTS` is read for its version
 only (``layout_ok=False``) and is not supported.
 """
@@ -91,6 +92,7 @@ only (``layout_ok=False``) and is not supported.
 from __future__ import annotations
 
 import asyncio
+import bisect
 import datetime as dt
 import logging
 import re
@@ -101,6 +103,7 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .const import AreaMode, ZoneState
+from .event_types import EVENT_OBJECT_KINDS, EVENT_TYPE_NAMES
 from .models import FAULT_FLAG_KEYS
 
 _LOGGER = logging.getLogger(__name__)
@@ -216,37 +219,13 @@ _LOG_LEN = 56000
 _LOG_REC = 14
 _EPOCH2000 = dt.datetime(2000, 1, 1)
 
-# Event-code dictionary (record bytes B0,B1 -> human label), built by correlating
-# a live 6004 log with the panel's own CSV export. Unknown codes render raw.
-_EVENT_CODES: dict[str, str] = {
-    "0422": "Failed call",
-    "0522": "Failed call",
-    "fc22": "Call queue full",
-    "6e1f": "Valid key",
-    "6d1f": "Valid key",
-    "891c": "Reset partition",
-    "8a1c": "Reset partition",
-    "8b1c": "Reset partition",
-    "8c1c": "Reset partition",
-    "2f1c": "Partition armed (away)",
-    "301c": "Partition armed (away)",
-    "311c": "Partition armed (away)",
-    "321c": "Partition armed (away)",
-    "6b1c": "Disarm partition",
-    "6c1c": "Disarm partition",
-    "6d1c": "Disarm partition",
-    "6e1c": "Disarm partition",
-    "210c": "Bypass zone",
-    "0f10": "Bypass zone",
-    "1e10": "Bypass zone",
-    "5b22": "Scenario",
-    "5c22": "Scenario",
-    "5d22": "Scenario",
-    "5e22": "Scenario",
-    "5f22": "Scenario",
-    "6022": "Scenario",
-    "6222": "Scenario",
-}
+# The event-log context op (0x1F, libdriver "get_logger_rules") answers, after
+# its 4-byte echo, (u32 address, u32 length) pairs; the first is the panel's
+# event-class table: 5-byte entries [u16 LE first code][b2][kind][b4], sorted,
+# ending with a sentinel (Prime/STUDIO Comm::LeggiLogger). Live on 5.00: the
+# table at 0x1A037C3C, 735 bytes, 145 classes.
+_LOG_CLASS_REC = 5
+_LOG_CLASS_MAX_LEN = 5 * 512  # a sanity bound on the table length
 
 # 40x (PrimeX 4.x) EEPROM offsets (base 0x14000000). Firmware-version-specific.
 _VERSION_ADDR = 0x1A002400
@@ -338,8 +317,11 @@ _LAYOUT_40X = _Layout(
 # terminal count (0x1408B920 live-verified on 5.00: 20/20 zones, correct area
 # membership). terminal_cfg = getValue["spring_exf_prg_terminals"] = 0x14087294,
 # pulse_cfg = getValue["spring_exf_pulse_settings"] = 0x1413C068 and zone_opt2 =
-# getValue["spring_exf_opt_zone_1"] = 0x14086060 (all live-verified on 5.00). The 5.x event-log offset is known (spring_eep_logger_ev = 0x104A8)
-# but log_addr stays None until the 5.x log decode is verified live.
+# getValue["spring_exf_opt_zone_1"] = 0x14086060 (all live-verified on 5.00). The
+# event log is at spring_eep_logger_ev = 0x104A8, with 4.x's 14-byte records
+# (live-verified on 5.00: 1264 records with valid timestamps); its event codes
+# are numbered differently, so they are decoded with the class table the panel
+# reports (see decode_event_classes).
 _LAYOUT_50X = _Layout(
     name="50x",
     scenario_modi=0x14099368,
@@ -353,7 +335,7 @@ _LAYOUT_50X = _Layout(
     terminal_cfg=0x14087294,
     pulse_cfg=0x1413C068,
     zone_opt2=0x14086060,
-    log_addr=None,
+    log_addr=0x104A8,
     # Native writes verified live on 5.00 (2026-10-19): single arm/disarm ops
     # answer in ~0.03 s with the same echo as 4.07 and do not lock the panel.
     native_writes_ok=True,
@@ -1168,20 +1150,71 @@ def scene_target_modes(arms: dict[int, str]) -> dict[int, AreaMode] | None:
     return modes or None
 
 
+@dataclass(frozen=True)
+class EventClass:
+    """One class of the panel's event codes: the codes from ``start`` on.
+
+    ``kind`` is the 1-based object kind byte (see event_types.EVENT_OBJECT_KINDS),
+    0 when the class names no object.
+    """
+
+    start: int
+    kind: int
+
+
+def logger_class_table(resp: bytes) -> tuple[int, int] | None:
+    """Return the event-class table's (address, length) from an op 0x1F reply.
+
+    None when the reply does not hold a plausible table: the log is then
+    decoded without event names.
+    """
+    if len(resp) < 12:
+        return None
+    addr = int.from_bytes(resp[4:8], "little")
+    length = int.from_bytes(resp[8:12], "little")
+    if not addr or not 0 < length <= _LOG_CLASS_MAX_LEN or length % _LOG_CLASS_REC:
+        return None
+    return addr, length
+
+
+def decode_event_classes(table: bytes) -> list[EventClass]:
+    """Decode the event-class table; the last class returned is the end sentinel.
+
+    The table is read up to its first entry that does not start after the one
+    before (the sentinel repeats its code, then padding follows).
+    """
+    classes: list[EventClass] = []
+    for off in range(0, len(table) - _LOG_CLASS_REC + 1, _LOG_CLASS_REC):
+        start = int.from_bytes(table[off : off + 2], "little")
+        if classes and start <= classes[-1].start:
+            break
+        classes.append(EventClass(start=start, kind=table[off + 3]))
+    return classes
+
+
 def decode_event_log(
     blob: bytes,
     area_labels: dict[int, str] | None = None,
     scenario_labels: dict[int, str] | None = None,
+    classes: list[EventClass] | None = None,
+    zone_labels: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Decode the panel event-log ring (14-byte records) into a time-sorted list.
 
     Record: ``[ts u32 LE, epoch 2000-01-01 = panel local time][b4 partition
-    bitmask][b5..7][B0 subtype][B1 class][B2 source][B3 flags: 0x80=set /
-    clear=restoral][..]``. Empty/invalid slots (ts outside 2025-2027) are skipped.
-    ``area_labels`` / ``scenario_labels`` map ids -> names for enrichment.
+    bitmask][b5..7][event code u16 LE][b10][b11 flags: 0x80=set /
+    clear=restoral][..]``. Empty/invalid slots (ts outside 2025-2027) are
+    skipped. The code is named with ``classes`` (the panel's class table):
+    the event type, and for a class spanning several codes the object it names
+    (zone, area, scenario: by label; anything else: by 1-based number). Without
+    a class for it the code is shown raw (``code:<b8><b9>``).
+    ``area_labels`` / ``scenario_labels`` / ``zone_labels`` map ids -> names.
     """
     area_labels = area_labels or {}
     scenario_labels = scenario_labels or {}
+    labels = {"area": area_labels, "scenario": scenario_labels, "zone": zone_labels or {}}
+    classes = classes or []
+    starts = [c.start for c in classes]
     out: list[dict[str, Any]] = []
     for off in range(0, len(blob) - _LOG_REC + 1, _LOG_REC):
         r = blob[off : off + _LOG_REC]
@@ -1194,12 +1227,25 @@ def decode_event_log(
         ]
         entry: dict[str, Any] = {
             "time": (_EPOCH2000 + dt.timedelta(seconds=ts)).strftime("%Y-%m-%d %H:%M:%S"),
-            "event": _EVENT_CODES.get(f"{b0:02x}{b1:02x}", f"code:{b0:02x}{b1:02x}"),
+            "event": f"code:{b0:02x}{b1:02x}",
             "partitions": partitions,
             "restoral": not (b3 & 0x80),
         }
-        if b1 == 0x22 and b0 >= 0x5B and (b0 - 0x5B) in scenario_labels:
-            entry["scenario"] = scenario_labels[b0 - 0x5B]
+        code = b0 | b1 << 8
+        index = bisect.bisect_right(starts, code) - 1
+        if 0 <= index < len(classes) - 1:  # the last class is the end sentinel
+            event_class = classes[index]
+            entry["event"] = (
+                EVENT_TYPE_NAMES[index]
+                if index < len(EVENT_TYPE_NAMES)
+                else f"Event type {index}"
+            )
+            span = classes[index + 1].start - event_class.start
+            if span > 1 and 1 <= event_class.kind <= len(EVENT_OBJECT_KINDS):
+                kind = EVENT_OBJECT_KINDS[event_class.kind - 1]
+                number = code - event_class.start
+                named = labels.get(kind)
+                entry[kind] = named.get(number, str(number + 1)) if named is not None else number + 1
         out.append(entry)
     out.sort(key=lambda e: e["time"])
     return out
@@ -1552,22 +1598,35 @@ class Local6004Client:
         self,
         area_labels: dict[int, str] | None = None,
         scenario_labels: dict[int, str] | None = None,
+        zone_labels: dict[int, str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Read and decode the panel event log (read-only), time-sorted."""
+        """Read and decode the panel event log (read-only), time-sorted.
+
+        The panel's event-class table is read in the same session, as
+        Prime/STUDIO does, so the codes are named on every firmware family.
+        """
         log_addr = self._layout.log_addr
         if log_addr is None:
             raise Local6004Error(
                 f"event log offset not mapped for the {self._layout.name} firmware layout"
             )
         try:
-            blob = (
-                await asyncio.wait_for(
-                    self._session(_OPEN_LOG, [(log_addr, _LOG_LEN)]), self._timeout
-                )
-            )[0]
+            blob, table = await asyncio.wait_for(self._read_log(log_addr), self._timeout)
         except (TimeoutError, OSError, ValueError) as err:
             raise Local6004Error(str(err)) from err
-        return decode_event_log(blob, area_labels, scenario_labels)
+        classes = decode_event_classes(table) if table is not None else []
+        return decode_event_log(blob, area_labels, scenario_labels, classes, zone_labels)
+
+    async def _read_log(self, log_addr: int) -> tuple[bytes, bytes | None]:
+        """Read the event log and the panel's event-class table, in one session."""
+        reader, writer = await asyncio.open_connection(self._host, self._port)
+        try:
+            rules = await self._xfer(reader, writer, _OPEN_LOG, first=True)
+            span = logger_class_table(rules)
+            table = await self._read(reader, writer, *span) if span is not None else None
+            return await self._read(reader, writer, log_addr, _LOG_LEN), table
+        finally:
+            await self._close_quietly(writer)
 
     async def _read_config(self) -> Local6004Config:
         # version first (its own context) -> gate on the 40x layout
@@ -1746,11 +1805,16 @@ class Local6004Client:
                 out.append(await self._read(reader, writer, addr, length))
             return out
         finally:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except OSError:
-                pass
+            await self._close_quietly(writer)
+
+    @staticmethod
+    async def _close_quietly(writer: asyncio.StreamWriter) -> None:
+        """Close a session's connection; a teardown error changes nothing."""
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
 
     async def _read(
         self,

@@ -2,7 +2,8 @@
 
 Registers ``inim_prime.get_event_log``: a strictly READ-ONLY, on-demand action
 that reads the panel's stored event log over the local protocol (TCP 6004),
-decodes it (time, event, partitions, scenario, restoral) and returns it as the
+decodes it (time, event type, partitions, the zone, area, scenario or other
+object it names, restoral) and returns it as the
 service response. Nothing is stored in Home Assistant — a card or script calls
 this when it wants the history.
 """
@@ -73,8 +74,11 @@ async def _handle_get_event_log(call: ServiceCall) -> ServiceResponse:
 
     area_labels = {area.id: area.label for area in coordinator.data.areas}
     scenario_labels = {s.id: s.label for s in coordinator.data.scenarios}
+    zone_labels = {zone.id: zone.label for zone in coordinator.data.zones}
     try:
-        events = await local_client.async_read_event_log(area_labels, scenario_labels)
+        events = await local_client.async_read_event_log(
+            area_labels, scenario_labels, zone_labels
+        )
     except Local6004Error as err:
         raise HomeAssistantError(
             translation_domain=DOMAIN,

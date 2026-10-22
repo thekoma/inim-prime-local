@@ -142,7 +142,7 @@ The native protocol is AES-encrypted with the panel's LAN password as the key an
 | Panel | Status |
 |---|---|
 | INIM **PrimeX** (firmware 4.07) | ✅ Primary development hardware |
-| INIM **PrimeX / Prime** (firmware 5.00) | ✅ Everything except the **event log**: its location in the 5.00 memory map is not known yet |
+| INIM **PrimeX / Prime** (firmware 5.00) | ✅ Everything, event log included (27 event types new in 5.00 have no name yet, see [known limitations](docs/known-limitations.md)) |
 | Other firmware families | ❌ Setup stops with *firmware not supported*: the native memory map is specific to each firmware family (4.x, 5.x) |
 
 SmartLiving / Nexus panels use a different protocol and are **not** covered here (see Alternatives).
