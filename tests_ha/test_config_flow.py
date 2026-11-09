@@ -27,12 +27,13 @@ from custom_components.inim_prime.const import (
     CONF_LOCAL_PASSWORD,
     CONF_PANELS,
     CONF_REQUIRE_CODE,
+    CONF_USE_OUTER_FRAME,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DOMAIN,
 )
 
-USER_INPUT = {CONF_NAME: "Panel", CONF_HOST: "192.0.2.10", CONF_LOCAL_PASSWORD: "pass"}
+USER_INPUT = {CONF_NAME: "Panel", CONF_HOST: "192.0.2.10", CONF_LOCAL_PASSWORD: "pass", CONF_USE_OUTER_FRAME: False}
 
 
 async def _user_flow(hass: HomeAssistant, user_input: dict = USER_INPUT):
@@ -49,6 +50,7 @@ async def test_user_flow_success(hass: HomeAssistant, patch_client: AsyncMock) -
         CONF_NAME,
         CONF_HOST,
         CONF_LOCAL_PASSWORD,
+        CONF_USE_OUTER_FRAME,
         CONF_GROUP_BY_ROOM,
     }
 
@@ -131,6 +133,23 @@ async def test_user_flow_already_configured(hass: HomeAssistant, patch_client: A
     assert result["reason"] == "already_configured"
     patch_client.async_read_config.assert_not_awaited()
 
+async def test_user_flow_passes_the_primelan_option(
+    hass: HomeAssistant, mock_local_client: AsyncMock
+) -> None:
+    with (
+        patch(
+            "custom_components.inim_prime.config_flow.Local6004Client",
+            return_value=mock_local_client,
+        ) as flow_client,
+        patch("custom_components.inim_prime.Local6004Client", return_value=mock_local_client) as setup_client,
+    ):
+        result = await _user_flow(hass, {**USER_INPUT, CONF_USE_OUTER_FRAME: True})
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_USE_OUTER_FRAME] is True
+    assert flow_client.call_args.kwargs["use_outer_frame"] is True
+    assert setup_client.call_args.kwargs["use_outer_frame"] is True
 
 def _add_entry(hass: HomeAssistant, **overrides) -> MockConfigEntry:
     """Register a config entry to reauthenticate or reconfigure."""
@@ -180,9 +199,9 @@ async def test_reconfigure_updates_name_host_and_password(
     result = await entry.start_reconfigure_flow(hass)
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "reconfigure"
-    assert set(result["data_schema"].schema) == {CONF_NAME, CONF_HOST, CONF_LOCAL_PASSWORD}
+    assert set(result["data_schema"].schema) == {CONF_NAME, CONF_HOST, CONF_LOCAL_PASSWORD, CONF_USE_OUTER_FRAME}
 
-    new_input = {CONF_NAME: "Alarm", CONF_HOST: "192.0.2.20", CONF_LOCAL_PASSWORD: "rotated"}
+    new_input = {CONF_NAME: "Alarm", CONF_HOST: "192.0.2.20", CONF_LOCAL_PASSWORD: "rotated", CONF_USE_OUTER_FRAME: True}
     patch_client.async_read_config.side_effect = Local6004Error("unreachable")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], new_input)
     assert result["type"] is FlowResultType.FORM

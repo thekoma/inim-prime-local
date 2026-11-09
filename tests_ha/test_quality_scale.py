@@ -117,9 +117,15 @@ def test_config_translations_are_native_only(name: str) -> None:
         "name",
         "host",
         "local_6004_password",
+        "use_outer_frame",
         "group_by_room",
     }
-    assert set(steps["reconfigure"]["data"]) == {"name", "host", "local_6004_password"}
+    assert set(steps["reconfigure"]["data"]) == {
+        "name",
+        "host",
+        "local_6004_password",
+        "use_outer_frame",
+    }
     assert set(steps["reauth_confirm"]["data"]) == {"local_6004_password"}
     # Options start as a menu (settings / panels); the settings form holds the
     # per-entry options.

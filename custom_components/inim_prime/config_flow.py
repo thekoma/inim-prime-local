@@ -35,6 +35,7 @@ from .const import (
     CONF_LOCAL_PASSWORD,
     CONF_PANELS,
     CONF_REQUIRE_CODE,
+    CONF_USE_OUTER_FRAME,
     CONF_WEBHOOK_ENABLED,
     CONF_WEBHOOK_ID,
     DEFAULT_GROUP_BY_ROOM,
@@ -61,9 +62,16 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 2
 
-    async def _async_validate(self, host: str, password: str) -> dict[str, str]:
+    async def _async_validate(
+        self, host: str, password: str, use_outer_frame: bool
+    ) -> dict[str, str]:
         """Read the panel's config natively. Return a (possibly empty) error map."""
-        client = Local6004Client(host=host, password=password, port=LOCAL_6004_PORT)
+        client = Local6004Client(
+            host=host,
+            password=password,
+            port=LOCAL_6004_PORT,
+            use_outer_frame=use_outer_frame,
+        )
         try:
             config = await client.async_read_config()
         except Local6004Error:
@@ -83,7 +91,9 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(host)
             self._abort_if_unique_id_configured()
 
-            errors = await self._async_validate(host, user_input[CONF_LOCAL_PASSWORD])
+            errors = await self._async_validate(
+                host, user_input[CONF_LOCAL_PASSWORD], user_input[CONF_USE_OUTER_FRAME]
+            )
             if not errors:
                 # Room grouping is asked here because it shapes the entity IDs,
                 # which Home Assistant fixes when the entities are first made.
@@ -106,6 +116,7 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                     probatio.Required(CONF_NAME, default=DEFAULT_NAME): str,
                     probatio.Required(CONF_HOST): str,
                     probatio.Required(CONF_LOCAL_PASSWORD, default=DEFAULT_LOCAL_PASSWORD): _PASSWORD,
+                    probatio.Required(CONF_USE_OUTER_FRAME, default=False): bool,
                     probatio.Required(CONF_GROUP_BY_ROOM, default=DEFAULT_GROUP_BY_ROOM): bool,
                 }
             ),
@@ -129,7 +140,9 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             password = user_input[CONF_LOCAL_PASSWORD]
-            errors = await self._async_validate(entry.data[CONF_HOST], password)
+            errors = await self._async_validate(
+                entry.data[CONF_HOST], password, entry.data.get(CONF_USE_OUTER_FRAME, False)
+            )
             if not errors:
                 return self.async_update_reload_and_abort(
                     entry, data_updates={CONF_LOCAL_PASSWORD: password}
@@ -159,7 +172,9 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
             if collision is not None and collision.entry_id != entry.entry_id:
                 return self.async_abort(reason="already_configured")
 
-            errors = await self._async_validate(host, user_input[CONF_LOCAL_PASSWORD])
+            errors = await self._async_validate(
+                host, user_input[CONF_LOCAL_PASSWORD], user_input[CONF_USE_OUTER_FRAME]
+            )
             if not errors:
                 return self.async_update_reload_and_abort(
                     entry,
@@ -179,6 +194,10 @@ class InimPrimeConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_LOCAL_PASSWORD,
                         default=suggested.get(CONF_LOCAL_PASSWORD, DEFAULT_LOCAL_PASSWORD),
                     ): _PASSWORD,
+                    probatio.Required(
+                        CONF_USE_OUTER_FRAME,
+                        default=suggested.get(CONF_USE_OUTER_FRAME, False),
+                    ): bool,
                 }
             ),
             errors=errors,

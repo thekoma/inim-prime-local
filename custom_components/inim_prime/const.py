@@ -75,6 +75,11 @@ CONF_AREAS_OFFERED: Final = "areas_offered"
 # state and commands. The password is the panel LAN password (default "pass"),
 # validated at config time; setup fails without it.
 CONF_LOCAL_PASSWORD: Final = "local_6004_password"
+
+# Connected through a PrimeLAN network card: every native frame is wrapped in a
+# 12-byte outer header (see client/local6004.py). Off = the panel's on-board LAN.
+CONF_USE_OUTER_FRAME: Final = "use_outer_frame"
+
 DEFAULT_LOCAL_PASSWORD: Final = "pass"
 LOCAL_6004_PORT: Final = 6004
 # Friendly name for the panel; used as the config-entry title and the device

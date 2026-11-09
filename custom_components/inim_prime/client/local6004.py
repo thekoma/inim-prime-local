@@ -117,6 +117,16 @@ _PREAMBLE = b"\x50\x50"
 # Response preambles seen on live panels: ``50 50`` on firmware 4.x, ``50 54``
 # on firmware 5.00 (same framing, crypto and commands otherwise).
 _RESPONSE_PREAMBLES = frozenset({b"\x50\x50", b"\x50\x54"})
+
+# PrimeLAN network card: every frame, both ways, is wrapped in a 12-byte outer
+# header [50 53][00 00][inner frame length u32 LE][expected response inner frame
+# length u32 LE] (layout from Pitscheider's inim-prime-native, verified on a
+# PrimeX 4.07 behind a PrimeLAN). The on-board LAN port speaks the inner frame only.
+_OUTER_PREAMBLE = b"\x50\x53"
+_OUTER_HEADER_LEN = 12
+_INNER_HEADER_LEN = 10
+_AES_BLOCK = 16
+
 _READ_START = 0x11
 _READ_CONT = 0x10
 # The only memory opcodes ever sent (literal, independent of the names above).
@@ -419,6 +429,24 @@ def _build_frame(app: bytes, key: bytes, iv: bytes, *, first: bool) -> bytes:
     frame[2:4] = crc16_arc(bytes(frame[4:])).to_bytes(2, "little")
     return bytes(frame)
 
+def _wrap_outer(inner: bytes, response_len: int) -> bytes:
+    """Wrap an inner frame in the PrimeLAN outer header."""
+    return (
+        _OUTER_PREAMBLE
+        + b"\x00\x00"
+        + len(inner).to_bytes(4, "little")
+        + response_len.to_bytes(4, "little")
+        + inner
+    )
+
+
+def _read_response_len(want: int) -> int:
+    """Expected inner frame length of a memory-read answer (for the outer header).
+
+    The answer carries ``want`` data bytes plus a checksum byte, AES-padded,
+    after the 10-byte inner header.
+    """
+    return (want + 1 + _AES_BLOCK - 1) // _AES_BLOCK * _AES_BLOCK + _INNER_HEADER_LEN
 
 class OpcodeNotAllowed(RuntimeError):
     """A frame with an opcode outside its allow-list was about to be built.
@@ -1403,10 +1431,20 @@ class Local6004Client:
     called.
     """
 
-    def __init__(self, host: str, password: str, *, port: int = PORT, timeout: float = 10.0):
+    def __init__(
+            self,
+            host: str,
+            password: str,
+            *,
+            port: int = PORT,
+            timeout: float = 10.0,
+            use_outer_frame: bool = False,
+    ):
         self._host = host
         self._port = port
         self._timeout = timeout
+        # True behind a PrimeLAN card: frames carry the outer header.
+        self._outer = use_outer_frame
         self._key, self._iv = make_key_iv(password)
         # Memory map for this panel's firmware family. Defaults to 40x so the
         # live status/command methods work even before a config read; a config
@@ -1940,7 +1978,11 @@ class Local6004Client:
         while len(out) < length:
             want = min(_CHUNK, length - len(out))
             resp = await self._xfer(
-                reader, writer, _read_cmd(addr + len(out), want, cont=not first), first=False
+                reader,
+                writer,
+                _read_cmd(addr + len(out), want, cont=not first),
+                first=False,
+                response_len=_read_response_len(want),
             )
             out += resp[:want]  # drop trailing status byte(s)
             first = False
@@ -1953,12 +1995,32 @@ class Local6004Client:
         app: bytes,
         *,
         first: bool,
+        response_len: int = 0,
     ) -> bytes:
-        writer.write(_build_frame(app, self._key, self._iv, first=first))
+        frame = _build_frame(app, self._key, self._iv, first=first)
+        if self._outer:
+            frame = _wrap_outer(frame, response_len)
+        writer.write(frame)
         await writer.drain()
-        header = await reader.readexactly(10)
+        if self._outer:
+            outer = await reader.readexactly(_OUTER_HEADER_LEN)
+            if outer[:2] != _OUTER_PREAMBLE or outer[2:4] != b"\x00\x00":
+                raise ValueError(
+                    f"bad outer header {outer.hex(' ')} (panel not behind a PrimeLAN?)"
+                )
+            inner_len = int.from_bytes(outer[4:8], "little")
+            if inner_len < _INNER_HEADER_LEN:
+                raise ValueError(f"outer header declares a {inner_len}-byte inner frame")
+            inner = await reader.readexactly(inner_len)
+            header, ct = inner[:_INNER_HEADER_LEN], inner[_INNER_HEADER_LEN:]
+        else:
+            header = await reader.readexactly(_INNER_HEADER_LEN)
         if header[:2] not in _RESPONSE_PREAMBLES:
             raise ValueError(f"bad preamble {header[:2].hex()} (wrong password?)")
-        ln = int.from_bytes(header[6:8], "little")
-        ct = await reader.readexactly(ln - 10)
+        if self._outer:
+            if int.from_bytes(header[6:10], "little") != inner_len:
+                raise ValueError("inner frame length mismatch with the outer header")
+        else:
+            ln = int.from_bytes(header[6:8], "little")
+            ct = await reader.readexactly(ln - _INNER_HEADER_LEN)
         return _unpad(_aes(self._key, self._iv, ct, decrypt=True))

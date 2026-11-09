@@ -8,11 +8,13 @@
           "name": "Name",
           "host": "Host",
           "local_6004_password": "Panel LAN password",
+          "use_outer_frame": "Connected through a PrimeLAN card",
           "group_by_room": "Group zones by room"
         },
         "data_description": {
           "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\").",
           "local_6004_password": "The panel's LAN/programming password (default 'pass'). Home Assistant talks to the panel only over its local protocol (TCP 6004); PrimeX/Prime firmware 4.x and 5.00 are supported.",
+          "use_outer_frame": "Turn on if the panel is reached through a PrimeLAN network card instead of its on-board LAN port. The PrimeLAN wraps every native frame in an extra header.",
           "group_by_room": "Place each zone (and its bypass switch) under a device named after the room guessed from the zone name, so you can assign whole rooms to areas. Entity IDs take the device name when they are first created, so turn this off now if you want them all to start with the panel name. You can change it later in Settings."
         }
       },
@@ -29,16 +31,18 @@
         "data": {
           "name": "Name",
           "host": "Host",
-          "local_6004_password": "Panel LAN password"
+          "local_6004_password": "Panel LAN password",
+          "use_outer_frame": "Connected through a PrimeLAN card"
         },
         "data_description": {
           "name": "Friendly name for this panel — used for the device and entity names (e.g. \"Allarme\").",
-          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Home Assistant talks to the panel only over its local protocol (TCP 6004); PrimeX/Prime firmware 4.x and 5.00 are supported."
+          "local_6004_password": "The panel's LAN/programming password (default 'pass'). Home Assistant talks to the panel only over its local protocol (TCP 6004); PrimeX/Prime firmware 4.x and 5.00 are supported.",
+          "use_outer_frame": "Turn on if the panel is reached through a PrimeLAN network card instead of its on-board LAN port. The PrimeLAN wraps every native frame in an extra header."
         }
       }
     },
     "error": {
-      "cannot_connect": "Could not read the panel over its local protocol (TCP 6004). Check the address, the LAN password and that the panel is reachable.",
+      "cannot_connect": "Could not read the panel over its local protocol (TCP 6004). Check the address, the LAN password and that the panel is reachable. If the panel is behind a PrimeLAN card, make sure \"Connected through a PrimeLAN card\" is turned on; if it uses the on-board LAN port, turn it off.",
       "unsupported_firmware": "This panel firmware is not supported: its memory map is not known. PrimeX/Prime firmware 4.x and 5.00 are supported.",
       "unknown": "Unexpected error."
     },

@@ -12,6 +12,7 @@ from .areas import async_sync_area_registry, async_track_unselected_areas
 from .client import Local6004Client, Local6004Config, Local6004Error
 from .const import (
     CONF_LOCAL_PASSWORD,
+    CONF_USE_OUTER_FRAME,
     CONF_WEBHOOK_ENABLED,
     DOMAIN,
     LEGACY_DATA_KEYS,
@@ -51,7 +52,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: InimConfigEntry) -> bool
         raise ConfigEntryError(
             "The panel LAN password is required. Reconfigure the integration to add it."
         )
-    client = Local6004Client(host=entry.data[CONF_HOST], password=password, port=LOCAL_6004_PORT)
+    client = Local6004Client(
+        host=entry.data[CONF_HOST],
+        password=password,
+        port=LOCAL_6004_PORT,
+        use_outer_frame=entry.data.get(CONF_USE_OUTER_FRAME, False),
+    )
     config = await _async_read_config(client)
     # The live reads and the commands share one persistent connection.
     entry.async_on_unload(client.async_close)
