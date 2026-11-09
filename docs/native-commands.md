@@ -53,6 +53,12 @@ A command is `[op:4 LE][PIN:6][data]`, AES-encrypted in the usual 6004 frame wit
 
 The unit tests pin these bodies byte for byte to the output of Pitscheider's own payload builders.
 
+## Through a PrimeLAN card
+
+Behind a PrimeLAN card every frame, both ways, carries a 12-byte outer header in front of the usual one: `50 53 00 00`, then the inner frame length and the expected answer's inner frame length (both u32 LE). The integration announces the answer length only for memory reads (the chunk plus its checksum byte, AES-padded, plus the 10-byte inner header) and 0 for everything else; the card has not needed more. The inner frame passes through unchanged, `50 54` preamble included on 5.00. The panel's on-board LAN port speaks the inner frame only, so the outer header is sent only with *Connected through a PrimeLAN card* turned on.
+
+The layout comes from [inim-prime-native](https://github.com/Pitscheider/inim-prime-native). Pitscheider added the support in [#35](https://github.com/thekoma/inim-prime-local/pull/35); it runs on two Prime panels with firmware 5.00 behind a PrimeLAN.
+
 ## Checking it on your panel
 
 Commands act on a real alarm: test at home, with the keypad or the INIM app at hand, one step at a time, and check both Home Assistant and the keypad after each step.

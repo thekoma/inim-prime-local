@@ -4,7 +4,8 @@
 Nothing needs enabling on the panel: Home Assistant talks to it over its native LAN protocol (TCP port 6004), the same channel Prime/STUDIO uses, which is always on. You need:
 
 1. the panel's **IP address** (or the PrimeLAN board's);
-2. its **LAN password**, the one Prime/STUDIO asks for to connect over the network (factory default `pass`; change it in Prime/STUDIO if it is still the default).
+2. its **LAN password**, the one Prime/STUDIO asks for to connect over the network (factory default `pass`; change it in Prime/STUDIO if it is still the default);
+3. whether Home Assistant reaches the panel through a **PrimeLAN** card or through the panel's on-board LAN port. The card wraps every frame in an extra header, so setup has an option for it.
 
 Supported firmware: PrimeX/Prime **4.x** and **5.00**. On any other firmware family setup stops with *firmware not supported*, because the panel's memory map (where names and settings live) differs between families.
 
@@ -16,6 +17,7 @@ Supported firmware: PrimeX/Prime **4.x** and **5.00**. On any other firmware fam
 | Name | `Allarme` | Used for the device and entity names |
 | Host | `192.168.1.50` | Panel IP (or PrimeLAN IP) |
 | Panel LAN password | `pass` | The panel's LAN/programming password |
+| Connected through a PrimeLAN card | off | Turn it on if the host is a PrimeLAN card; leave it off for the panel's on-board LAN port |
 | Group zones by room | on | Puts each zone whose name contains a room (*Cucina*, *Bagno*…) under a device for that room |
 
 Setup reads the panel's structure once: which areas, zones, scenarios and outputs exist, their names and how each zone is programmed. On success you get one **device** with entities for every area with a real name, every zone, scenario and output. Unused factory-default areas (`AREA 006`…) get no entities, and the output switches are created **disabled** — enable any you need from the device page.
@@ -31,7 +33,7 @@ Open the integration → **Configure** and pick the panel areas under **Areas to
 - Selecting an area again creates its entities afresh, without any custom name or room you had given them.
 
 ## Changing the password or the address
-Open the integration → **⋮ → Reconfigure** to change the name, the host or the LAN password. No need to delete and re-add. A wrong password cannot be told apart from an unreachable panel, so after changing it in Prime/STUDIO update it here too.
+Open the integration → **⋮ → Reconfigure** to change the name, the host, the LAN password or the PrimeLAN option. No need to delete and re-add. A wrong password cannot be told apart from an unreachable panel, so after changing it in Prime/STUDIO update it here too.
 
 ## Upgrading from a version that used the HTTP API
 Versions before 2026.10.7 also read the panel through its HTTP API (`api.cgi`, with an API key). On the first start after the upgrade the entry is migrated:
